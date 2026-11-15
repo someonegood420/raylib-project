@@ -84,21 +84,13 @@ Texture2D Art_LoadPointTexture(const char *path) {
 // Missing frames remain empty and are drawn as placeholders.
 static void LoadAnimation(AnimId id) {
   const AnimDef *def = &animDefs[id];
-  if (def->frameCount < 1 || def->frameCount > MAX_ANIM_FRAMES) {
-    TraceLog(LOG_WARNING, "ART: invalid frame count for animation %d", id);
-    return;
-  }
-
   for (int i = 0; i < def->frameCount; i++) {
     char path[256];
-    snprintf(path, sizeof(path), "%s/%d.png", def->folder, i + 1);
+    snprintf(path, sizeof path, "%s/%d.png", def->folder, i + 1);
     animFrames[id][i] = Art_LoadPointTexture(path);
+    if (animFrames[id][i].id == 0)
+      TraceLog(LOG_FATAL, "ART: missing frame %s", path); // exits
   }
-}
-
-static bool HasFrame(AnimId id, int frame) {
-  return id >= 0 && id < ANIM_COUNT && frame >= 0 && frame < animDefs[id].frameCount &&
-         animFrames[id][frame].id != 0;
 }
 
 void Art_Load(void) {
@@ -146,8 +138,6 @@ static int CurrentFrame(void) {
 // Squash/stretch continues to be rounded to physical screen pixels.
 static void DrawSpriteFrame(int animId, int frame, Rectangle box, float sx, float sy,
                             bool facingRight, Color tint) {
-  if (animId < 0 || animId >= ANIM_COUNT || !HasFrame((AnimId)animId, frame))
-    return;
   Texture2D t = animFrames[animId][frame];
   float fw = (float)t.width, fh = (float)t.height;
   Rectangle src = {0, 0, facingRight ? fw : -fw, fh};
@@ -173,53 +163,36 @@ static void DrawSprite(Rectangle box, float sx, float sy, bool facingRight, Colo
 // =====================================================================
 
 void Art_DrawPlayer(const ArtPlayer *a) {
-  if (HasFrame(curAnim, CurrentFrame())) {
-    Color tint = WHITE;
-    if (a->lowStamina)
-      tint = (Color){255, 110, 110, 255};
-    if (a->chargedFlash)
-      tint = WHITE; // the flash shader overrides any other tint
-    bool flash = a->chargedFlash && ghostShader.id != 0;
-    if (flash)
-      BeginShaderMode(ghostShader);
-    DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
-    if (flash)
-      EndShaderMode();
+  Color tint = a->lowStamina ? (Color){255, 110, 110, 255} : WHITE;
+  bool flash = a->chargedFlash && ghostShader.id != 0;
+  if (flash) {
+    tint = WHITE;
+    BeginShaderMode(ghostShader);
   }
+  DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
+  if (flash)
+    EndShaderMode();
 
-  if (a->stamina01 < 1.0f) // stamina bar
-  {
-    // whole art pixels: 10 px wide, 1 px tall
-    float bw = 10.0f * ART_PIXEL;
-    float bh = (float)ART_PIXEL;
+  if (a->stamina01 < 1.0f) {
+    float bw = 10.0f * ART_PIXEL, bh = (float)ART_PIXEL;
     float bx = SnapPx(a->box.x + a->box.width / 2 - bw / 2);
-    bool hasSprite = HasFrame(curAnim, CurrentFrame());
-    float by = SnapPx(a->box.y - 4.0f * ART_PIXEL - (hasSprite ? 12 : 0));
+    float by = SnapPx(a->box.y - 4.0f * ART_PIXEL - 12); // hasSprite is always true now
     DrawRectangleRec((Rectangle){bx, by, bw, bh}, (Color){40, 40, 50, 255});
     DrawRectangleRec((Rectangle){bx, by, SnapPx(bw * a->stamina01 + ART_PIXEL * 0.5f), bh}, GREEN);
   }
 }
 
-ArtFrame Art_CurrentFrame(void) {
-  ArtFrame f = {-1, 0};
-  if (HasFrame(curAnim, CurrentFrame())) {
-    f.anim = (int)curAnim;
-    f.frame = CurrentFrame();
-  }
-  return f;
-}
+ArtFrame Art_CurrentFrame(void) { return (ArtFrame){(int)curAnim, CurrentFrame()}; }
 
 // Ghost = a frozen copy of a sprite frame (like GhostTrail.cs copying
 // playerSR.sprite).
 void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight, Color tint) {
-  if (frame.anim >= 0 && frame.anim < ANIM_COUNT && HasFrame((AnimId)frame.anim, frame.frame)) {
-    bool shade = ghostShader.id != 0; // else: plain sprite if the shader failed
-    if (shade)
-      BeginShaderMode(ghostShader);
-    DrawSpriteFrame(frame.anim, frame.frame, box, 1.0f, 1.0f, facingRight, tint);
-    if (shade)
-      EndShaderMode();
-  }
+  bool shade = ghostShader.id != 0;
+  if (shade)
+    BeginShaderMode(ghostShader);
+  DrawSpriteFrame(frame.anim, frame.frame, box, 1.0f, 1.0f, facingRight, tint);
+  if (shade)
+    EndShaderMode();
 }
 
 // =====================================================================

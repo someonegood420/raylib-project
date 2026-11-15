@@ -253,7 +253,7 @@ static void ExplodeAt(Vector2 pos) {
   // The collision array may be reallocated when merged IntGrid solids split.
   solids = level.solids;
   solidCount = level.solidCount;
-  Fx_Event(FX_EXPLOSION, (Rectangle){pos.x - 8, pos.y - 8, 16, 16}, (Vector2){0, -1}, true);
+  Fx_Event(FX_EXPLOSION, (Rectangle){pos.x - 8, pos.y - 8, 16, 16}, (Vector2){0, -1});
   shakeTime = SHAKE_DURATION;
 }
 static void ThrowBomb(Vector2 pos, Vector2 dir) {
@@ -310,7 +310,7 @@ typedef struct {
   // timers
   float time;
   float lastOnGround, lastOnWall, lastOnWallL, lastOnWallR;
-  float lastPressedJump, lastJumpPressTime;
+  float lastPressedJump;
   float wallJumpStart;
   float burstFxTimer;
   float burstWindow; // > 0: burst speed is still protected
@@ -452,7 +452,7 @@ static void DoJump(Player *p) {
   p->burstWindow = 0.0f;  // jumped in time: no decay, speed is kept
   if (onGround)           // bunnyhop boost
     p->vel.x += p->in.x * JUMP_SPEED_BOOST;
-  Fx_Event(FX_JUMP, p->box, (Vector2){0, 0}, p->facingRight);
+  Fx_Event(FX_JUMP, p->box, (Vector2){0, 0});
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
@@ -482,7 +482,7 @@ static void DoWallJump(Player *p, int dir, bool climbJump, float cost) {
       p->turnLock = true;
       p->turnLockDir = -dir; // the direction back toward the wall
     }
-    Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)dir, 0}, p->facingRight);
+    Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)dir, 0});
   }
 }
 
@@ -514,7 +514,7 @@ static void StartBombBurst(Player *p) {
   p->lastOnGround = 0.0f;
   p->burstFxTimer = BOMB_BURST_FX_TIME;
   Vector2 fxDir = {side, -1};
-  Fx_Event(FX_DASH_START, p->box, fxDir, p->facingRight);
+  Fx_Event(FX_DASH_START, p->box, fxDir);
   ExplodeAt((Vector2){p->box.x + p->box.width * 0.5f, p->box.y + p->box.height});
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
@@ -532,7 +532,7 @@ static void ReboundFromBombDive(Player *p) {
   p->jumping = p->jumpFalling = p->jumpCut = false;
   p->lastOnGround = 0.0f;
   p->burstFxTimer = BOMB_BURST_FX_TIME;
-  Fx_Event(FX_DASH_START, p->box, (Vector2){side, -1}, p->facingRight);
+  Fx_Event(FX_DASH_START, p->box, (Vector2){side, -1});
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
@@ -705,7 +705,7 @@ static void UpdatePlayer(Player *p, float dt) {
         p->turnLock = true;
         p->turnLockDir = -p->convertDir;
       }
-      Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)p->convertDir, 0}, p->facingRight);
+      Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)p->convertDir, 0});
       p->convertTimer = 0.0f;
     }
   }
@@ -860,7 +860,7 @@ static void UpdatePlayer(Player *p, float dt) {
   }
 
   // ---------- visual effects ----------
-  FxPlayerState fxs = {p->box, p->vel, p->facingRight, p->burstFxTimer > 0.0f, false};
+  FxPlayerState fxs = {p->box, p->vel, p->facingRight, p->burstFxTimer > 0.0f};
   Fx_Tick(dt, &fxs);
   TickBombs(dt);
 
@@ -887,7 +887,6 @@ static void ReadInput(Player *p) {
 
   if (PRESSED(BIND_JUMP_1, BIND_JUMP_2)) {
     p->lastPressedJump = JUMP_BUFFER;
-    p->lastJumpPressTime = p->time;
   }
   // releasing jump while still rising -> "jump cut" (higher gravity)
   if (RELEASED(BIND_JUMP_1, BIND_JUMP_2) && !p->jumpHeld && (p->jumping || p->wallJumping) &&
@@ -945,7 +944,6 @@ static ArtPlayer MakeArtPlayer(const Player *p) {
   a.sy = p->sy;
   a.facingRight = p->facingRight;
   a.chargedFlash = p->burstReady && sinf(p->time * 34.0f) > -0.1f;
-  a.noDash = false; // burst availability depends only on charge
   a.lowStamina = p->stamina <= 0.0f || (p->stamina < LOW_STAMINA && sinf(p->time * 40.0f) > 0.0f);
   a.stamina01 = p->stamina / MAX_STAMINA;
   return a;

@@ -11,10 +11,9 @@ drawn instead, so the game always runs.
 
 // Tile size, shared with the level code (main.c) so platforms always sit on the
 // tile grid.
-#define ART_TILE_SIZE 8  // one tile in the PNG (px)
-#define ART_TILE_SCALE 4 // integer upscale
-#define ART_TILE_PX                                                            \
-  (ART_TILE_SIZE * ART_TILE_SCALE) // one tile on screen (32 px)
+#define ART_TILE_SIZE 8                              // one tile in the PNG (px)
+#define ART_TILE_SCALE 4                             // integer upscale
+#define ART_TILE_PX (ART_TILE_SIZE * ART_TILE_SCALE) // one tile on screen (32 px)
 
 // The pixel-perfect layer is rendered at 1 art pixel = 1 texel, then upscaled
 // by this integer. Everything in that layer must sit on this grid (world px).
@@ -41,7 +40,6 @@ typedef struct {
   Rectangle box; // hitbox (sprite is drawn bottom-centred on it)
   float sx, sy;  // squash & stretch scale (1 = normal)
   bool facingRight;
-  bool noDash;       // optional legacy tint flag
   bool lowStamina;   // flash red
   bool chargedFlash; // white flash when bombburst is charged
   float stamina01;   // 0..1, bar is hidden at 1

@@ -1,8 +1,7 @@
 /*
 fx.c - see fx.h.
 
-Optional sprites (resources/fx/): speedring.png and ripple.png. If a file is
-missing a drawn placeholder is used, so everything works with no art.
+Requires resources/fx/speedring.png (the game exits at startup if it is missing).
 */
 
 #include "art.h"
@@ -18,39 +17,32 @@ missing a drawn placeholder is used, so everything works with no art.
 #define FX_U(v) ((v) * (float)ART_TILE_PX)
 
 // ---- Ghost trail  (GhostTrail.cs) ----
-// ShowGhost() walks through the ghost pool: ghost i appears i * GHOST_INTERVAL
-// seconds after the dash starts, copies your position / facing / sprite frame
-// at that moment, starts at GHOST_TRAIL_COLOR and fades to GHOST_FADE_COLOR
-// over GHOST_FADE_TIME. (A fade colour with alpha 0 makes it disappear.)
-#define GHOST_MAX 4          // how many ghosts exist (= children of ghostsParent)
-#define GHOST_INTERVAL 0.08f // ghostInterval
-#define GHOST_FADE_TIME 0.5f // fadeTime
-#define GHOST_TRAIL_COLOR ((Color){255, 93, 154, 255}) // trailColor
-#define GHOST_FADE_COLOR ((Color){255, 93, 154, 0})    // fadeColor
+// ghost i appears i * GHOST_INTERVAL seconds after the dash starts, copies your
+// position / facing / sprite frame, and fades from TRAIL_COLOR to FADE_COLOR.
+#define GHOST_MAX 4
+#define GHOST_INTERVAL 0.08f
+#define GHOST_FADE_TIME 0.5f
+#define GHOST_TRAIL_COLOR ((Color){255, 93, 154, 255})
+#define GHOST_FADE_COLOR ((Color){255, 93, 154, 0})
 
 // ---- Dash ribbon (TrailRenderer "dashline") ----
 #define TRAIL_TIME 0.25f // seconds a point of the ribbon lives
 #define TRAIL_WIDTH 4.0f // px at the head, tapering to 0
-#define TRAIL_COLOR ((Color){255, 255, 255, 255})
 
 // ---- Speed rings (ShockwaveRing.cs + PlayerMovement.SpawnSpeedRing) ----
 #define SPEEDRING_SCALE 0.4f         // texture size multiplier
-#define SPEEDRING_THRESHOLD FX_U(34) // Data.speedRingThreshold (|vx| or |vy| above this)
-#define SPEEDRING_COOLDOWN 0.15f     // shockwaveCooldown
-#define SPEEDRING_EXPAND 3.0f        // expandSpeed
-#define SPEEDRING_FADE 2.0f          // fadeSpeed
-#define SPEEDRING_RADIUS 0.5f        // starting radius of the placeholder ring (px)
-#define SPEEDRING_COLOR ((Color){255, 255, 255, 255})
-#define SPEEDRING_SPRITE_ROT 0.0f // extra rotation for your sprite (degrees)
+#define SPEEDRING_THRESHOLD FX_U(34) // |vx| or |vy| above this spawns rings
+#define SPEEDRING_COOLDOWN 0.15f
+#define SPEEDRING_EXPAND 3.0f
+#define SPEEDRING_FADE 2.0f
 
 // ---- Ripple (SpawnRipple) ----
 #define RIPPLE_LIFE 0.4f
 #define RIPPLE_R0 FX_U(0.6f)
 #define RIPPLE_R1 FX_U(3.6f)
 
-// ---- Particles ----
+// ---- Pool sizes ----
 #define MAX_PARTICLES 512
-
 #define MAX_RIPPLES 4
 #define MAX_SPEEDRINGS 16
 #define MAX_TRAIL_PTS 160
@@ -97,7 +89,7 @@ static bool trailWasEmitting = false;
 static Ripple ripples[MAX_RIPPLES];
 static SpeedRing rings[MAX_SPEEDRINGS];
 
-static bool ghostSeq = false; // a ShowGhost() sequence is running
+static bool ghostSeq = false; // a ghost sequence is running
 static int ghostIdx = 0;
 static float ghostTimer = 0.0f;
 
@@ -114,10 +106,7 @@ static float RandF(float a, float b) {
 }
 
 static Color LerpColor(Color a, Color b, float t) {
-  if (t < 0.0f)
-    t = 0.0f;
-  if (t > 1.0f)
-    t = 1.0f;
+  t = fmaxf(0.0f, fminf(t, 1.0f));
   return (Color){(unsigned char)(a.r + (b.r - a.r) * t), (unsigned char)(a.g + (b.g - a.g) * t),
                  (unsigned char)(a.b + (b.b - a.b) * t), (unsigned char)(a.a + (b.a - a.a) * t)};
 }
@@ -145,6 +134,11 @@ static void Emit(Vector2 pos, Vector2 vel, float life, float s0, float s1, Color
     *q = (Particle){pos, vel, life, life, s0, s1, gravity, c0, c1, true};
 }
 
+// Grey dust puff shared by jump and wall jump.
+static void Puff(Vector2 pos, Vector2 vel, float life, float gravity) {
+  Emit(pos, vel, life, 7.0f, 2.0f, (Color){215, 215, 225, 230}, (Color){215, 215, 225, 0}, gravity);
+}
+
 static void SpawnRipple(Vector2 c) {
   Ripple *r = SPAWN(ripples, Ripple, MAX_RIPPLES);
   if (r)
@@ -155,13 +149,12 @@ static void SpawnRipple(Vector2 c) {
 //  LIFECYCLE
 // =====================================================================
 void Fx_Load(void) {
-  ringTex = Art_LoadPointTexture("fx/speedring.png"); // else a drawn ring
+  ringTex = Art_LoadPointTexture("fx/speedring.png");
+  if (ringTex.id == 0)
+    TraceLog(LOG_FATAL, "FX: missing fx/speedring.png");
 }
 
-void Fx_Unload(void) {
-  UnloadTexture(ringTex);
-  ringTex = (Texture2D){0};
-}
+void Fx_Unload(void) { UnloadTexture(ringTex); }
 
 void Fx_Reset(void) {
   memset(particles, 0, sizeof particles);
@@ -181,51 +174,42 @@ void Fx_Event(FxEvent e, Rectangle box, Vector2 dir, bool facingRight) {
   Vector2 c = Center(box);
 
   switch (e) {
-  case FX_JUMP: // jumpparticle: dust puff at the feet
+  case FX_JUMP: // dust puff at the feet
     for (int i = 0; i < 10; i++) {
       Vector2 pos = {c.x + RandF(-box.width / 2, box.width / 2), box.y + box.height - 2};
       Vector2 vel = {RandF(-FX_U(2.5f), FX_U(2.5f)), RandF(-FX_U(2.0f), -FX_U(0.3f))};
-      Emit(pos, vel, RandF(0.3f, 0.5f), 7.0f, 2.0f, (Color){215, 215, 225, 230},
-           (Color){215, 215, 225, 0}, FX_U(2.0f));
+      Puff(pos, vel, RandF(0.3f, 0.5f), FX_U(2.0f));
     }
     break;
 
-  case FX_WALL_JUMP: // wjumpparticle: puff from the wall side, thrown away from
-                     // the wall
-  {
+  case FX_WALL_JUMP: { // puff from the wall side, thrown away from the wall
     float away = dir.x >= 0.0f ? 1.0f : -1.0f;
-    float x = away > 0 ? box.x : box.x + box.width; // the side touching the wall
+    float x = away > 0 ? box.x : box.x + box.width;
     for (int i = 0; i < 10; i++) {
       Vector2 pos = {x, box.y + RandF(box.height * 0.3f, box.height)};
       Vector2 vel = {away * RandF(FX_U(0.5f), FX_U(3.0f)), RandF(-FX_U(1.0f), FX_U(1.0f))};
-      Emit(pos, vel, RandF(0.25f, 0.45f), 7.0f, 2.0f, (Color){215, 215, 225, 230},
-           (Color){215, 215, 225, 0}, FX_U(1.5f));
+      Puff(pos, vel, RandF(0.25f, 0.45f), FX_U(1.5f));
     }
     break;
   }
 
-  case FX_DASH_START: // ghostTrail.ShowGhost() + SpawnRipple()
-  {
+  case FX_DASH_START: // ghost sequence + ripple at the dash start position
     ghostSeq = true;
     ghostIdx = 0;
     ghostTimer = 0.0f;
-
-    SpawnRipple(c); // ripple at that fixed world position
-    break;
-  }
-
-  case FX_EXPLOSION: {
-    // Explosions create a ripple and radial particles, not player ghost copies.
     SpawnRipple(c);
-    for (int i = 0; i < 28; ++i) {
-      float angle = (6.2831853f * i) / 28.0f;
+    break;
+
+  case FX_EXPLOSION: // ripple + radial particles
+    SpawnRipple(c);
+    for (int i = 0; i < 28; i++) {
+      float angle = (2.0f * PI * i) / 28.0f;
       float speed = RandF(FX_U(5.0f), FX_U(13.0f));
       Vector2 vel = {cosf(angle) * speed, sinf(angle) * speed};
       Emit(c, vel, RandF(0.18f, 0.4f), 8.0f, 1.0f, (Color){255, 248, 205, 255},
            (Color){255, 120, 40, 0}, FX_U(1.0f));
     }
     break;
-  }
   }
 }
 
@@ -240,20 +224,14 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
   if (ghostSeq) {
     ghostTimer -= dt;
     while (ghostSeq && ghostTimer <= 0.0f) {
-      GhostSlot *g = &ghostSlots[ghostIdx];
-      g->box = p->box;                 // copy position
-      g->facingRight = p->facingRight; // copy flip
-      g->frame = Art_CurrentFrame();   // copy sprite
-      g->t = 0.0f;                     // colour starts at trailColor
-      g->active = true;
-      ghostIdx++;
+      ghostSlots[ghostIdx] = (GhostSlot){p->box, Art_CurrentFrame(), p->facingRight, 0.0f, true};
       ghostTimer += GHOST_INTERVAL;
-      if (ghostIdx >= GHOST_MAX)
+      if (++ghostIdx >= GHOST_MAX)
         ghostSeq = false;
     }
   }
   for (int i = 0; i < GHOST_MAX; i++)
-    if (ghostSlots[i].active && ghostSlots[i].t < GHOST_FADE_TIME)
+    if (ghostSlots[i].active)
       ghostSlots[i].t += dt;
 
   // ---- dash ribbon ----
@@ -278,8 +256,7 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
   trailWasEmitting = p->dashAttacking;
 
   // ---- speed rings ----
-  float ax = fabsf(p->vel.x), ay = fabsf(p->vel.y);
-  if ((ax > SPEEDRING_THRESHOLD || ay > SPEEDRING_THRESHOLD) &&
+  if ((fabsf(p->vel.x) > SPEEDRING_THRESHOLD || fabsf(p->vel.y) > SPEEDRING_THRESHOLD) &&
       fxTime > lastRingTime + SPEEDRING_COOLDOWN) {
     SpeedRing *r = SPAWN(rings, SpeedRing, MAX_SPEEDRINGS);
     if (r) {
@@ -289,7 +266,7 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
   }
   for (int i = 0; i < MAX_SPEEDRINGS; i++)
     if (rings[i].active && 1.0f - SPEEDRING_FADE * (rings[i].t += dt) <= 0.0f)
-      rings[i].active = false; // alpha hit 0 -> Destroy
+      rings[i].active = false;
 
   // ---- ripples ----
   for (int i = 0; i < MAX_RIPPLES; i++)
@@ -301,8 +278,7 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
     Particle *q = &particles[i];
     if (!q->active)
       continue;
-    q->life -= dt;
-    if (q->life <= 0.0f) {
+    if ((q->life -= dt) <= 0.0f) {
       q->active = false;
       continue;
     }
@@ -315,28 +291,19 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
 // =====================================================================
 //  DRAW
 // =====================================================================
-
 int Fx_GetRippleData(Vector2 centers[FX_RIPPLE_CAPACITY], float radii[FX_RIPPLE_CAPACITY],
                      float strengths[FX_RIPPLE_CAPACITY]) {
   int count = 0;
-
   for (int i = 0; i < MAX_RIPPLES; i++) {
     if (!ripples[i].active)
       continue;
-
-    float k = ripples[i].t / RIPPLE_LIFE;
-    k = fmaxf(0.0f, fminf(k, 1.0f));
-
-    // Same ease-out expansion as the existing visible ripple.
-    float e = 1.0f - (1.0f - k) * (1.0f - k);
-    float r = RIPPLE_R0 + (RIPPLE_R1 - RIPPLE_R0) * e;
-
+    float k = ripples[i].t / RIPPLE_LIFE;     // always in [0, 1): expired ripples are inactive
+    float e = 1.0f - (1.0f - k) * (1.0f - k); // ease-out expansion
     centers[count] = ripples[i].pos;
-    radii[count] = r;
+    radii[count] = RIPPLE_R0 + (RIPPLE_R1 - RIPPLE_R0) * e;
     strengths[count] = 1.0f - k;
     count++;
   }
-
   return count;
 }
 
@@ -344,9 +311,9 @@ int Fx_GetRippleData(Vector2 centers[FX_RIPPLE_CAPACITY], float radii[FX_RIPPLE_
 // low-res pixel target always land on whole pixels.
 static float Snap(float v) { return floorf(v / (float)ART_PIXEL) * (float)ART_PIXEL; }
 
-// ---- PIXEL-PERFECT LAYER: ghosts, speed rings, particles ----
+// ---- PIXEL-PERFECT LAYER: ghosts, speed rings, particles, dash ribbon ----
 void Fx_DrawPixelLayer(void) {
-  // ghosts: colour lerps trailColor -> fadeColor over fadeTime
+  // ghosts: colour lerps trail -> fade over GHOST_FADE_TIME
   for (int i = 0; i < GHOST_MAX; i++) {
     if (!ghostSlots[i].active)
       continue;
@@ -364,16 +331,13 @@ void Fx_DrawPixelLayer(void) {
     float alpha = 1.0f - SPEEDRING_FADE * rings[i].t;
     if (alpha <= 0.0f)
       continue;
-    Color col = SPEEDRING_COLOR;
-    col.a = (unsigned char)(col.a * alpha);
-    if (ringTex.id != 0) {
-      float w = ringTex.width * ART_TILE_SCALE * SPEEDRING_SCALE * s;
-      float h = ringTex.height * ART_TILE_SCALE * SPEEDRING_SCALE * s;
-      Rectangle src = {0, 0, (float)ringTex.width, (float)ringTex.height};
-      Rectangle dst = {rings[i].pos.x, rings[i].pos.y, w, h};
-      DrawTexturePro(ringTex, src, dst, (Vector2){w / 2, h / 2},
-                     rings[i].angle * 57.2957795f + SPEEDRING_SPRITE_ROT, col);
-    }
+    Color col = WHITE;
+    col.a = (unsigned char)(255 * alpha);
+    float w = ringTex.width * ART_TILE_SCALE * SPEEDRING_SCALE * s;
+    float h = ringTex.height * ART_TILE_SCALE * SPEEDRING_SCALE * s;
+    Rectangle src = {0, 0, (float)ringTex.width, (float)ringTex.height};
+    Rectangle dst = {rings[i].pos.x, rings[i].pos.y, w, h};
+    DrawTexturePro(ringTex, src, dst, (Vector2){w / 2, h / 2}, rings[i].angle * RAD2DEG, col);
   }
 
   // particles (whole art pixels, on the pixel grid)
@@ -386,9 +350,10 @@ void Fx_DrawPixelLayer(void) {
     if (sz < 1.0f)
       continue;
     sz = fmaxf((float)ART_PIXEL, Snap(sz + (float)ART_PIXEL * 0.5f));
-    Color col = LerpColor(q->c0, q->c1, k);
-    DrawRectangleRec((Rectangle){Snap(q->pos.x - sz / 2), Snap(q->pos.y - sz / 2), sz, sz}, col);
+    DrawRectangleRec((Rectangle){Snap(q->pos.x - sz / 2), Snap(q->pos.y - sz / 2), sz, sz},
+                     LerpColor(q->c0, q->c1, k));
   }
+
   // dash ribbon (tapers + fades with age)
   for (int i = 1; i < trailCount; i++) {
     if (trail[i].strandStart)
@@ -396,8 +361,8 @@ void Fx_DrawPixelLayer(void) {
     float k = 1.0f - trail[i].age / TRAIL_TIME;
     if (k <= 0.0f)
       continue;
-    Color col = TRAIL_COLOR;
-    col.a = (unsigned char)(col.a * k);
+    Color col = WHITE;
+    col.a = (unsigned char)(255 * k);
     DrawLineEx(trail[i - 1].p, trail[i].p, TRAIL_WIDTH * k, col);
   }
 }

@@ -10,6 +10,12 @@
     <Filter Include="Game Resource Files">
       <UniqueIdentifier>{BAF00917-2652-E724-AFBF-2DD71B201EE4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Game Resource Files\bomb">
+      <UniqueIdentifier>{69982970-55BD-78F0-7E08-5E806A8C770E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\explosion">
+      <UniqueIdentifier>{6ADAF728-D6F2-DE52-9F9F-6EEC0B7773EC}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Game Resource Files\fx">
       <UniqueIdentifier>{07C46A2A-F3BD-937C-DC2A-2A8DC8C3F9E8}</UniqueIdentifier>
     </Filter>
@@ -18,6 +24,39 @@
     </Filter>
     <Filter Include="Game Resource Files\player">
       <UniqueIdentifier>{B6205D41-A230-0912-0BEA-6D30F718F8AA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\bomb_dive">
+      <UniqueIdentifier>{0C596238-F83F-2430-A190-8A4D8D569D96}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\burst">
+      <UniqueIdentifier>{B5446E89-A195-59CB-CAF9-478DB6A9EC34}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\crouch">
+      <UniqueIdentifier>{091C54B9-758A-A938-BE73-64382A219FD4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\fall">
+      <UniqueIdentifier>{C41BA8F4-30FF-B634-3902-E570A5647D85}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\idle">
+      <UniqueIdentifier>{A3CDA9F4-0FB1-B834-18B4-E67084167F85}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\jump">
+      <UniqueIdentifier>{81A2AAF4-ED85-B934-F688-E77062EB7F85}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\run">
+      <UniqueIdentifier>{FA45E6F7-E66B-B05E-CFB1-352ABB76D52A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\throw_ground">
+      <UniqueIdentifier>{670A6E90-D399-2F7B-DC95-109348A46A87}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\wall_climb">
+      <UniqueIdentifier>{9B153150-07DA-2F40-D03F-600A3CC3CB75}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\wall_grab">
+      <UniqueIdentifier>{101C59A5-FC02-1B9D-A553-81BA91199403}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player\wall_slide">
+      <UniqueIdentifier>{859C5251-F160-5141-BAC6-810B264AED76}</UniqueIdentifier>
     </Filter>
     <Filter Include="Game Resource Files\shaders">
       <UniqueIdentifier>{B3C78F4A-1FD5-BD30-A8BB-B91B14C889E7}</UniqueIdentifier>
@@ -34,6 +73,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\fx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\jsmn.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\level.h">
@@ -77,41 +119,164 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
+    <Image Include="resources\bomb\bombbluesmall.png">
+      <Filter>Game Resource Files\bomb</Filter>
+    </Image>
+    <Image Include="resources\bomb\bombredsmall.png">
+      <Filter>Game Resource Files\bomb</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_0.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_1.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_2.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_3.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_4.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_5.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_6.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_7.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
+    <Image Include="resources\explosion\explosion_8.png">
+      <Filter>Game Resource Files\explosion</Filter>
+    </Image>
     <Image Include="resources\fx\speedring.png">
       <Filter>Game Resource Files\fx</Filter>
     </Image>
-    <Image Include="resources\player\crouch.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\bomb_dive\1.png">
+      <Filter>Game Resource Files\player\bomb_dive</Filter>
     </Image>
-    <Image Include="resources\player\dash.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\bomb_dive\2.png">
+      <Filter>Game Resource Files\player\bomb_dive</Filter>
     </Image>
-    <Image Include="resources\player\fall.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\bomb_dive\3.png">
+      <Filter>Game Resource Files\player\bomb_dive</Filter>
     </Image>
-    <Image Include="resources\player\glide.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\burst\1.png">
+      <Filter>Game Resource Files\player\burst</Filter>
     </Image>
-    <Image Include="resources\player\gun.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\burst\2.png">
+      <Filter>Game Resource Files\player\burst</Filter>
     </Image>
-    <Image Include="resources\player\idle.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\burst\3.png">
+      <Filter>Game Resource Files\player\burst</Filter>
     </Image>
-    <Image Include="resources\player\jump.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\crouch\1.png">
+      <Filter>Game Resource Files\player\crouch</Filter>
     </Image>
-    <Image Include="resources\player\run.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\fall\1.png">
+      <Filter>Game Resource Files\player\fall</Filter>
     </Image>
-    <Image Include="resources\player\wall_climb.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\idle\1.png">
+      <Filter>Game Resource Files\player\idle</Filter>
     </Image>
-    <Image Include="resources\player\wall_grab.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\jump\1.png">
+      <Filter>Game Resource Files\player\jump</Filter>
     </Image>
-    <Image Include="resources\player\wall_slide.png">
-      <Filter>Game Resource Files\player</Filter>
+    <Image Include="resources\player\jump\2.png">
+      <Filter>Game Resource Files\player\jump</Filter>
+    </Image>
+    <Image Include="resources\player\jump\3.png">
+      <Filter>Game Resource Files\player\jump</Filter>
+    </Image>
+    <Image Include="resources\player\jump\4.png">
+      <Filter>Game Resource Files\player\jump</Filter>
+    </Image>
+    <Image Include="resources\player\jump\5.png">
+      <Filter>Game Resource Files\player\jump</Filter>
+    </Image>
+    <Image Include="resources\player\jump\6.png">
+      <Filter>Game Resource Files\player\jump</Filter>
+    </Image>
+    <Image Include="resources\player\run\1.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\10.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\11.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\12.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\2.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\3.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\4.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\5.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\6.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\7.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\8.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\run\9.png">
+      <Filter>Game Resource Files\player\run</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\1.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\2.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\3.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\4.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\5.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\throw_ground\6.png">
+      <Filter>Game Resource Files\player\throw_ground</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\1.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\2.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\3.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\4.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\5.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb\6.png">
+      <Filter>Game Resource Files\player\wall_climb</Filter>
+    </Image>
+    <Image Include="resources\player\wall_grab\1.png">
+      <Filter>Game Resource Files\player\wall_grab</Filter>
+    </Image>
+    <Image Include="resources\player\wall_slide\1.png">
+      <Filter>Game Resource Files\player\wall_slide</Filter>
     </Image>
     <Image Include="resources\tiles\ground.png">
       <Filter>Game Resource Files\tiles</Filter>
