@@ -5,10 +5,9 @@
  *   player/idle/1.png
  *   player/run/1.png ... player/run/12.png
  *   player/throw_ground/1.png ... player/throw_ground/5.png
- *   player/throw_air/1.png ... player/throw_air/5.png (optional)
+ *   player/throw_air/1.png ... player/throw_air/5.png
  *   player/bomb_dive/1.png ... player/bomb_dive/3.png
  *
- * Air-throw frames fall back to their corresponding ground-throw frames.
  * Keep every frame of an animation on an identically-sized transparent canvas.
  */
 
@@ -19,18 +18,13 @@
 // =====================================================================
 //  CONFIG  (edit these)
 // =====================================================================
-#define SPRITE_SCALE                                                           \
-  4 // integer upscale of player sprites (16x18 art -> 64x72 on screen)
-#define SPRITE_OFFSET_X                                                        \
-  0 // nudge the sprite relative to the hitbox (screen px, +x = forward)
+#define SPRITE_SCALE 4    // integer upscale of player sprites (16x18 art -> 64x72 on screen)
+#define SPRITE_OFFSET_X 0 // nudge the sprite relative to the hitbox (screen px, +x = forward)
 #define SPRITE_OFFSET_Y 0 // +y = down
 
 // The pixel-perfect layer needs sprites on the same grid as the tiles.
 _Static_assert(SPRITE_SCALE == ART_PIXEL,
                "SPRITE_SCALE must equal ART_TILE_SCALE for pixel-perfect");
-
-#define TINT_SPRITE_WHEN_NO_DASH                                               \
-  false // optional blue tint after consuming burst charge
 
 // =====================================================================
 //  ANIMATION DEFINITIONS
@@ -54,24 +48,16 @@ static const AnimDef animDefs[ANIM_COUNT] = {
     [ANIM_WALL_GRAB] = {"player/wall_grab", 1, 1, true},
     [ANIM_WALL_CLIMB] = {"player/wall_climb", 6, 10, true},
     [ANIM_CROUCH] = {"player/crouch", 1, 1, true},
-    [ANIM_THROW_GROUND] = {"player/throw_ground", 5, 12, false},
-    [ANIM_THROW_AIR] = {"player/throw_air", 5, 12, false},
+    [ANIM_THROW_GROUND] = {"player/throw_ground", 6, 20, false},
+    [ANIM_THROW_AIR] = {"player/throw_ground", 6, 50, false},
     [ANIM_BOMB_DIVE] = {"player/bomb_dive", 3, 12, false},
 };
 
-typedef struct {
-  Texture2D frames[MAX_ANIM_FRAMES];
-  bool owned[MAX_ANIM_FRAMES]; // false for a borrowed ground-throw frame
-} Animation;
-
-static Animation animations[ANIM_COUNT];
+static Texture2D animFrames[ANIM_COUNT][MAX_ANIM_FRAMES];
 static Texture2D bombTex;
-static bool bombOk = false;
 
 // snap a world coordinate to the art-pixel grid
-static float SnapPx(float v) {
-  return floorf(v / (float)ART_PIXEL) * (float)ART_PIXEL;
-}
+static float SnapPx(float v) { return floorf(v / (float)ART_PIXEL) * (float)ART_PIXEL; }
 
 // The camera zoom (set by main.c each frame). Squash & stretch is rounded to
 // whole SCREEN pixels, which at zoom 1.5 are 2/3 of a world pixel.
@@ -81,20 +67,16 @@ static float RoundScreen(float v) { return roundf(v * viewZoom) / viewZoom; }
 
 static AnimId curAnim = ANIM_IDLE;
 static float animTime = 0.0f;
-
+// Seconds from the start of an animation until frame `frame` (0-based) shows.
+float Art_FrameTime(AnimId id, int frame) { return frame / animDefs[id].fps; }
+// Restart the current animation from frame 1 (for a repeated throw).
+void Art_RestartAnim(void) { animTime = 0.0f; }
 static Shader ghostShader = {0};
 
-static Texture2D LoadPixelTexture(const char *path, bool *ok) {
-  *ok = false;
-  if (!FileExists(path)) {
-    TraceLog(LOG_WARNING, "ART: '%s' not found - using placeholder", path);
-    return (Texture2D){0};
-  }
+Texture2D Art_LoadPointTexture(const char *path) {
   Texture2D t = LoadTexture(path);
-  if (t.id == 0)
-    return t;
-  SetTextureFilter(t, TEXTURE_FILTER_POINT); // crisp pixels, no blur
-  *ok = true;
+  if (t.id != 0)
+    SetTextureFilter(t, TEXTURE_FILTER_POINT); // crisp pixels, no blur
   return t;
 }
 
@@ -110,16 +92,13 @@ static void LoadAnimation(AnimId id) {
   for (int i = 0; i < def->frameCount; i++) {
     char path[256];
     snprintf(path, sizeof(path), "%s/%d.png", def->folder, i + 1);
-    bool loaded = false;
-    animations[id].frames[i] = LoadPixelTexture(path, &loaded);
-    animations[id].owned[i] = loaded;
+    animFrames[id][i] = Art_LoadPointTexture(path);
   }
 }
 
 static bool HasFrame(AnimId id, int frame) {
-  return id >= 0 && id < ANIM_COUNT && frame >= 0 &&
-         frame < animDefs[id].frameCount &&
-         animations[id].frames[frame].id != 0;
+  return id >= 0 && id < ANIM_COUNT && frame >= 0 && frame < animDefs[id].frameCount &&
+         animFrames[id][frame].id != 0;
 }
 
 void Art_Load(void) {
@@ -130,28 +109,16 @@ void Art_Load(void) {
   for (int id = 0; id < ANIM_COUNT; id++)
     LoadAnimation((AnimId)id);
 
-  // Air-throw art is optional: borrow the corresponding ground frame.
-  for (int i = 0; i < 5; i++) {
-    if (!HasFrame(ANIM_THROW_AIR, i) && HasFrame(ANIM_THROW_GROUND, i)) {
-      animations[ANIM_THROW_AIR].frames[i] =
-          animations[ANIM_THROW_GROUND].frames[i];
-      animations[ANIM_THROW_AIR].owned[i] = false;
-    }
-  }
-  bombTex = LoadPixelTexture("bomb/bombbluesmall.png", &bombOk);
+  bombTex = Art_LoadPointTexture("bomb/bombbluesmall.png");
 }
 
 void Art_Unload(void) {
   if (ghostShader.id != 0)
     UnloadShader(ghostShader);
-  for (int a = 0; a < ANIM_COUNT; a++) {
-    for (int f = 0; f < animDefs[a].frameCount; f++) {
-      if (animations[a].owned[f])
-        UnloadTexture(animations[a].frames[f]);
-    }
-  }
-  if (bombOk)
-    UnloadTexture(bombTex);
+  for (int a = 0; a < ANIM_COUNT; a++)
+    for (int f = 0; f < animDefs[a].frameCount; f++)
+      UnloadTexture(animFrames[a][f]); // no-op for frames that never loaded
+  UnloadTexture(bombTex);
 }
 
 // =====================================================================
@@ -177,11 +144,11 @@ static int CurrentFrame(void) {
 
 // Draw one pre-sliced PNG frame, using the existing full-resolution geometry.
 // Squash/stretch continues to be rounded to physical screen pixels.
-static void DrawSpriteFrame(int animId, int frame, Rectangle box, float sx,
-                            float sy, bool facingRight, Color tint) {
+static void DrawSpriteFrame(int animId, int frame, Rectangle box, float sx, float sy,
+                            bool facingRight, Color tint) {
   if (animId < 0 || animId >= ANIM_COUNT || !HasFrame((AnimId)animId, frame))
     return;
-  Texture2D t = animations[animId].frames[frame];
+  Texture2D t = animFrames[animId][frame];
   float fw = (float)t.width, fh = (float)t.height;
   Rectangle src = {0, 0, facingRight ? fw : -fw, fh};
 
@@ -197,8 +164,7 @@ static void DrawSpriteFrame(int animId, int frame, Rectangle box, float sx,
   DrawTexturePro(t, src, dst, (Vector2){0, 0}, 0.0f, tint);
 }
 
-static void DrawSprite(Rectangle box, float sx, float sy, bool facingRight,
-                       Color tint) {
+static void DrawSprite(Rectangle box, float sx, float sy, bool facingRight, Color tint) {
   DrawSpriteFrame((int)curAnim, CurrentFrame(), box, sx, sy, facingRight, tint);
 }
 
@@ -209,19 +175,16 @@ static void DrawSprite(Rectangle box, float sx, float sy, bool facingRight,
 void Art_DrawPlayer(const ArtPlayer *a) {
   if (HasFrame(curAnim, CurrentFrame())) {
     Color tint = WHITE;
-    if (a->noDash && TINT_SPRITE_WHEN_NO_DASH)
-      tint = (Color){150, 190, 255, 255};
     if (a->lowStamina)
       tint = (Color){255, 110, 110, 255};
-    if (a->chargedFlash && ghostShader.id != 0) {
+    if (a->chargedFlash)
+      tint = WHITE; // the flash shader overrides any other tint
+    bool flash = a->chargedFlash && ghostShader.id != 0;
+    if (flash)
       BeginShaderMode(ghostShader);
-      DrawSprite(a->box, a->sx, a->sy, a->facingRight, WHITE);
+    DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
+    if (flash)
       EndShaderMode();
-    } else {
-      if (a->chargedFlash)
-        tint = WHITE; // shader missing: benign fallback
-      DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
-    }
   }
 
   if (a->stamina01 < 1.0f) // stamina bar
@@ -233,9 +196,7 @@ void Art_DrawPlayer(const ArtPlayer *a) {
     bool hasSprite = HasFrame(curAnim, CurrentFrame());
     float by = SnapPx(a->box.y - 4.0f * ART_PIXEL - (hasSprite ? 12 : 0));
     DrawRectangleRec((Rectangle){bx, by, bw, bh}, (Color){40, 40, 50, 255});
-    DrawRectangleRec(
-        (Rectangle){bx, by, SnapPx(bw * a->stamina01 + ART_PIXEL * 0.5f), bh},
-        GREEN);
+    DrawRectangleRec((Rectangle){bx, by, SnapPx(bw * a->stamina01 + ART_PIXEL * 0.5f), bh}, GREEN);
   }
 }
 
@@ -250,24 +211,14 @@ ArtFrame Art_CurrentFrame(void) {
 
 // Ghost = a frozen copy of a sprite frame (like GhostTrail.cs copying
 // playerSR.sprite).
-void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
-                   Color tint) {
-  if (frame.anim >= 0 && frame.anim < ANIM_COUNT &&
-      HasFrame((AnimId)frame.anim, frame.frame)) {
-    if (ghostShader.id != 0) {
+void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight, Color tint) {
+  if (frame.anim >= 0 && frame.anim < ANIM_COUNT && HasFrame((AnimId)frame.anim, frame.frame)) {
+    bool shade = ghostShader.id != 0; // else: plain sprite if the shader failed
+    if (shade)
       BeginShaderMode(ghostShader);
-
-      DrawSpriteFrame(frame.anim, frame.frame, box, 1.0f, 1.0f, facingRight,
-                      tint);
-
+    DrawSpriteFrame(frame.anim, frame.frame, box, 1.0f, 1.0f, facingRight, tint);
+    if (shade)
       EndShaderMode();
-    } else {
-      // Fallback if the shader failed to load.
-      DrawSpriteFrame(frame.anim, frame.frame, box, 1.0f, 1.0f, facingRight,
-                      tint);
-    }
-  } else {
-    DrawRectangleRec(box, tint);
   }
 }
 
@@ -277,14 +228,10 @@ void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
 // Bomb is drawn in the full-resolution world pass, like the player, so
 // fractional animation/rotation is not quantized by the low-res tile target.
 void Art_DrawBomb(Vector2 center, float angle) {
-  if (bombOk) {
+  if (bombTex.id != 0) {
     float w = bombTex.width * ART_PIXEL, h = bombTex.height * ART_PIXEL;
-    DrawTexturePro(
-        bombTex, (Rectangle){0, 0, (float)bombTex.width, (float)bombTex.height},
-        (Rectangle){center.x, center.y, w, h}, (Vector2){w * 0.5f, h * 0.5f},
-        angle, WHITE);
-  } else {
-    DrawCircleV(center, 12.0f, (Color){40, 40, 45, 255});
-    DrawCircleLines((int)center.x, (int)center.y, 12, WHITE);
+    DrawTexturePro(bombTex, (Rectangle){0, 0, (float)bombTex.width, (float)bombTex.height},
+                   (Rectangle){center.x, center.y, w, h}, (Vector2){w * 0.5f, h * 0.5f}, angle,
+                   WHITE);
   }
 }

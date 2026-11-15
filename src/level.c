@@ -6,8 +6,8 @@ Uses jsmn (jsmn.h, MIT license) to tokenize the .ldtk file.
 #include "art.h"
 #include "jsmn.h"
 #include "level.h"
-#include <stdio.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,15 +56,12 @@ static int Next(const Json *j, int i) {
 }
 
 static int Count(const Json *j, int i) {
-  return (i >= 0 && (j->t[i].type == JSMN_ARRAY || j->t[i].type == JSMN_OBJECT))
-             ? j->t[i].size
-             : 0;
+  return (i >= 0 && (j->t[i].type == JSMN_ARRAY || j->t[i].type == JSMN_OBJECT)) ? j->t[i].size : 0;
 }
 
 // for each child `it` of array `arr`
-#define EACH(j, arr, it)                                                       \
-  for (int it = (arr) + 1, it##_n = Count(j, arr); it##_n-- > 0;               \
-       it = Next(j, it))
+#define EACH(j, arr, it)                                                                           \
+  for (int it = (arr) + 1, it##_n = Count(j, arr); it##_n-- > 0; it = Next(j, it))
 
 // value node of key k in object o, or -1
 static int Get(const Json *j, int o, const char *k) {
@@ -83,8 +80,7 @@ static double NumAt(const Json *j, int i, double def) {
   if (i < 0 || j->t[i].type != JSMN_PRIMITIVE)
     return def;
   char c = j->text[j->t[i].start];
-  return (c == '-' || (c >= '0' && c <= '9')) ? strtod(j->text + j->t[i].start, NULL)
-                                              : def;
+  return (c == '-' || (c >= '0' && c <= '9')) ? strtod(j->text + j->t[i].start, NULL) : def;
 }
 
 static double Num(const Json *j, int o, const char *k, double def) {
@@ -102,8 +98,7 @@ static double ArrNum(const Json *j, int arr, int idx) {
 }
 
 // copy string value of key k into buf ("" if missing / not a string)
-static const char *Str(const Json *j, int o, const char *k, char *buf,
-                       size_t n) {
+static const char *Str(const Json *j, int o, const char *k, char *buf, size_t n) {
   int v = Get(j, o, k);
   buf[0] = '\0';
   if (v >= 0 && j->t[v].type == JSMN_STRING) {
@@ -120,8 +115,7 @@ static const char *Str(const Json *j, int o, const char *k, char *buf,
 static bool Is(const Json *j, int o, const char *k, const char *v) {
   int s = Get(j, o, k);
   size_t n = strlen(v);
-  return s >= 0 && j->t[s].type == JSMN_STRING &&
-         (size_t)(j->t[s].end - j->t[s].start) == n &&
+  return s >= 0 && j->t[s].type == JSMN_STRING && (size_t)(j->t[s].end - j->t[s].start) == n &&
          !memcmp(j->text + j->t[s].start, v, n);
 }
 
@@ -137,21 +131,17 @@ static int GetTexture(Level *lv, const char *dir, const char *rel) {
       return i;
 
   if (lv->texCount >= LEVEL_MAX_TILESETS) {
-    TraceLog(LOG_WARNING, "LEVEL: too many tilesets (max %d)",
-             LEVEL_MAX_TILESETS);
+    TraceLog(LOG_WARNING, "LEVEL: too many tilesets (max %d)", LEVEL_MAX_TILESETS);
     return -1;
   }
-  if (!FileExists(full)) {
-    TraceLog(
-        LOG_WARNING,
-        "LEVEL: tileset '%s' not found (path is relative to the .ldtk file)",
-        full);
+  Texture2D t = Art_LoadPointTexture(full);
+  if (t.id == 0) {
+    TraceLog(LOG_WARNING,
+             "LEVEL: tileset '%s' failed to load (path is relative to the "
+             ".ldtk file)",
+             full);
     return -1;
   }
-  Texture2D t = LoadTexture(full);
-  if (t.id == 0)
-    return -1;
-  SetTextureFilter(t, TEXTURE_FILTER_POINT);
 
   int idx = lv->texCount++;
   lv->tex[idx] = t;
@@ -174,8 +164,8 @@ static void AddTile(Level *lv, LevelTile t) {
   lv->tiles[lv->tileCount++] = t;
 }
 
-static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size,
-                      int offX, int offY, bool destructible) {
+static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size, int offX, int offY,
+                     bool destructible) {
   EACH(j, arr, t) {
     int px = Get(j, t, "px"), src = Get(j, t, "src");
     LevelTile lt;
@@ -197,8 +187,8 @@ static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size,
 //  Greedy merge: take the first free solid cell, grow right as far as
 //  possible, then grow down while the whole row below is solid + free.
 // ---------------------------------------------------------------------
-static void BuildSolids(Level *lv, const Json *j, int csv, int cw, int ch,
-                        int gs, int offX, int offY) {
+static void BuildSolids(Level *lv, const Json *j, int csv, int cw, int ch, int gs, int offX,
+                        int offY) {
   int n = cw * ch;
   int cap = 64;
   lv->solids = malloc((size_t)cap * sizeof(Rectangle));
@@ -221,8 +211,7 @@ static void BuildSolids(Level *lv, const Json *j, int csv, int cw, int ch,
     if (i >= n)
       break;
     const jsmntok_t *t = &j->t[it];
-    solid[i++] = (unsigned char)!(t->end - t->start == 1 &&
-                                  j->text[t->start] == '0');
+    solid[i++] = (unsigned char)!(t->end - t->start == 1 && j->text[t->start] == '0');
   }
 
   for (int y = 0; y < ch; y++) {
@@ -264,8 +253,7 @@ static void BuildSolids(Level *lv, const Json *j, int csv, int cw, int ch,
         lv->solids = ns;
       }
       lv->solids[lv->solidCount++] = (Rectangle){
-          (float)((x * gs + offX) * ART_TILE_SCALE),
-          (float)((y * gs + offY) * ART_TILE_SCALE),
+          (float)((x * gs + offX) * ART_TILE_SCALE), (float)((y * gs + offY) * ART_TILE_SCALE),
           (float)(w * gs * ART_TILE_SCALE), (float)(h * gs * ART_TILE_SCALE)};
     }
   }
@@ -277,8 +265,7 @@ done:
 // ---------------------------------------------------------------------
 //  entities
 // ---------------------------------------------------------------------
-static void AddEntities(Level *lv, const Json *j, int list, int offX,
-                        int offY) {
+static void AddEntities(Level *lv, const Json *j, int list, int offX, int offY) {
   EACH(j, list, e) {
     char id[48];
     Str(j, e, "__identifier", id, sizeof id);
@@ -292,14 +279,13 @@ static void AddEntities(Level *lv, const Json *j, int list, int offX,
 
     if (strcmp(id, LDTK_PLAYER_START) == 0) {
       lv->hasStart = true;
-      lv->start =
-          (Vector2){(float)((x + w / 2.0) * SCALE), (float)((y + h) * SCALE)};
+      lv->start = (Vector2){(float)((x + w / 2.0) * SCALE), (float)((y + h) * SCALE)};
     }
     if (lv->entityCount < LEVEL_MAX_ENTITIES) {
       LevelEntity *le = &lv->entities[lv->entityCount++];
       snprintf(le->id, sizeof le->id, "%s", id);
-      le->r = (Rectangle){(float)(x * SCALE), (float)(y * SCALE),
-                          (float)(w * SCALE), (float)(h * SCALE)};
+      le->r = (Rectangle){(float)(x * SCALE), (float)(y * SCALE), (float)(w * SCALE),
+                          (float)(h * SCALE)};
     }
   }
 }
@@ -314,8 +300,7 @@ static void LayerGrid(const Json *j, int layer, int *gs, int *ox, int *oy) {
   *oy = (int)Num(j, layer, "__pxTotalOffsetY", Num(j, layer, "pxOffsetY", 0));
 }
 
-static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
-                 const char *levelId) {
+static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const char *levelId) {
   // folder of the .ldtk file (tileset paths inside it are relative to this)
   char dir[256];
   {
@@ -337,8 +322,8 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
     }
   }
   if (level < 0) {
-    TraceLog(LOG_WARNING, "LEVEL: level '%s' not found in '%s'",
-             levelId ? levelId : "(first)", path);
+    TraceLog(LOG_WARNING, "LEVEL: level '%s' not found in '%s'", levelId ? levelId : "(first)",
+             path);
     return false;
   }
 
@@ -357,9 +342,7 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
       layers = -1;
   }
   if (layers < 0 || j->t[layers].type != JSMN_ARRAY) {
-    TraceLog(
-        LOG_WARNING,
-        "LEVEL: no layer data found (is the .ldtkl file next to the .ldtk?)");
+    TraceLog(LOG_WARNING, "LEVEL: no layer data found (is the .ldtkl file next to the .ldtk?)");
     return false;
   }
 
@@ -389,12 +372,10 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
   if (coll >= 0) {
     int gs, ox, oy;
     LayerGrid(j, coll, &gs, &ox, &oy);
-    BuildSolids(lv, j, Get(j, coll, "intGridCsv"),
-                (int)Num(j, coll, "__cWid", 0), (int)Num(j, coll, "__cHei", 0),
-                gs, ox, oy);
+    BuildSolids(lv, j, Get(j, coll, "intGridCsv"), (int)Num(j, coll, "__cWid", 0),
+                (int)Num(j, coll, "__cHei", 0), gs, ox, oy);
   } else
-    TraceLog(LOG_WARNING,
-             "LEVEL: no IntGrid layer named '%s' - nothing is solid!",
+    TraceLog(LOG_WARNING, "LEVEL: no IntGrid layer named '%s' - nothing is solid!",
              LDTK_COLLISION_LAYER);
 
   // 2) tiles + entities. LDtk lists layers top-most first, so draw them in
@@ -407,13 +388,7 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
     if (Str(j, layer, "__tilesetRelPath", rel, sizeof rel)[0]) {
       int tex = GetTexture(lv, dir, rel);
       if (tex >= 0) {
-        // Identify by LDtk layer name OR tileset filename.
-        // Naming the layer "Destructible" is recommended.
-        char layerId[128];
-        Str(j, layer, "__identifier", layerId, sizeof layerId);
-        bool destructible = strstr(layerId, "Destructible") != NULL ||
-                            strstr(layerId, "destructible") != NULL ||
-                            strstr(rel, "destructivetileset") != NULL;
+        bool destructible = Is(j, layer, "__identifier", LDTK_DESTRUCTIBLE_LAYER);
         AddTiles(lv, j, Get(j, layer, "autoLayerTiles"), tex, gs, ox, oy, destructible);
         AddTiles(lv, j, Get(j, layer, "gridTiles"), tex, gs, ox, oy, destructible);
       }
@@ -424,9 +399,8 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
 
   char id[64];
   TraceLog(LOG_INFO, "LEVEL: loaded '%s' - %d solids, %d tiles, %d entities%s",
-           Str(root, level, "identifier", id, sizeof id), lv->solidCount,
-           lv->tileCount, lv->entityCount,
-           lv->hasStart ? "" : " (no PlayerStart entity)");
+           Str(root, level, "identifier", id, sizeof id), lv->solidCount, lv->tileCount,
+           lv->entityCount, lv->hasStart ? "" : " (no PlayerStart entity)");
 
   free(list);
   return true;
@@ -462,15 +436,15 @@ void Level_Unload(Level *lv) {
 void Level_Draw(const Level *lv, Rectangle view) {
   for (int i = 0; i < lv->tileCount; i++) {
     const LevelTile *t = &lv->tiles[i];
-    if (t->destroyed) continue;
+    if (t->destroyed)
+      continue;
     float s = t->size * SCALE;
     Rectangle dst = {t->px * SCALE, t->py * SCALE, s, s};
-    if (dst.x + s < view.x || dst.x > view.x + view.width ||
-        dst.y + s < view.y || dst.y > view.y + view.height)
+    if (dst.x + s < view.x || dst.x > view.x + view.width || dst.y + s < view.y ||
+        dst.y > view.y + view.height)
       continue;
 
-    Rectangle src = {(float)t->sx, (float)t->sy,
-                     (t->flip & 1) ? -(float)t->size : (float)t->size,
+    Rectangle src = {(float)t->sx, (float)t->sy, (t->flip & 1) ? -(float)t->size : (float)t->size,
                      (t->flip & 2) ? -(float)t->size : (float)t->size};
     DrawTexturePro(lv->tex[t->tex], src, dst, (Vector2){0, 0}, 0.0f, WHITE);
   }
@@ -482,37 +456,47 @@ static void CutCollision(Level *lv, Rectangle cut) {
   int oldCount = lv->solidCount;
   Rectangle *old = lv->solids;
   Rectangle *next = malloc((size_t)(oldCount * 4 + 4) * sizeof(Rectangle));
-  if (!next) return;
+  if (!next)
+    return;
   int count = 0;
-  for (int i=0; i<oldCount; ++i) {
-    Rectangle s=old[i];
-    float x0=fmaxf(s.x,cut.x), x1=fminf(s.x+s.width,cut.x+cut.width);
-    float y0=fmaxf(s.y,cut.y), y1=fminf(s.y+s.height,cut.y+cut.height);
-    if (x0>=x1 || y0>=y1) { next[count++]=s; continue; }
-    if (y0>s.y) next[count++]=(Rectangle){s.x,s.y,s.width,y0-s.y};
-    if (y1<s.y+s.height) next[count++]=(Rectangle){s.x,y1,s.width,s.y+s.height-y1};
-    if (x0>s.x) next[count++]=(Rectangle){s.x,y0,x0-s.x,y1-y0};
-    if (x1<s.x+s.width) next[count++]=(Rectangle){x1,y0,s.x+s.width-x1,y1-y0};
+  for (int i = 0; i < oldCount; ++i) {
+    Rectangle s = old[i];
+    float x0 = fmaxf(s.x, cut.x), x1 = fminf(s.x + s.width, cut.x + cut.width);
+    float y0 = fmaxf(s.y, cut.y), y1 = fminf(s.y + s.height, cut.y + cut.height);
+    if (x0 >= x1 || y0 >= y1) {
+      next[count++] = s;
+      continue;
+    }
+    if (y0 > s.y)
+      next[count++] = (Rectangle){s.x, s.y, s.width, y0 - s.y};
+    if (y1 < s.y + s.height)
+      next[count++] = (Rectangle){s.x, y1, s.width, s.y + s.height - y1};
+    if (x0 > s.x)
+      next[count++] = (Rectangle){s.x, y0, x0 - s.x, y1 - y0};
+    if (x1 < s.x + s.width)
+      next[count++] = (Rectangle){x1, y0, s.x + s.width - x1, y1 - y0};
   }
   free(old);
-  lv->solids=next;
-  lv->solidCount=count;
+  lv->solids = next;
+  lv->solidCount = count;
 }
 
 int Level_Explode(Level *lv, Vector2 center, float radius) {
-  int destroyed=0;
-  for (int i=0; i<lv->tileCount; ++i) {
-    LevelTile *t=&lv->tiles[i];
-    if (!t->destructible || t->destroyed) continue;
-    float s=t->size*SCALE;
-    Rectangle r={t->px*SCALE,t->py*SCALE,s,s};
-    float cx=fmaxf(r.x,fminf(center.x,r.x+r.width));
-    float cy=fmaxf(r.y,fminf(center.y,r.y+r.height));
-    float dx=cx-center.x,dy=cy-center.y;
-    if (dx*dx+dy*dy>radius*radius) continue;
-    t->destroyed=true;
+  int destroyed = 0;
+  for (int i = 0; i < lv->tileCount; ++i) {
+    LevelTile *t = &lv->tiles[i];
+    if (!t->destructible || t->destroyed)
+      continue;
+    float s = t->size * SCALE;
+    Rectangle r = {t->px * SCALE, t->py * SCALE, s, s};
+    float cx = fmaxf(r.x, fminf(center.x, r.x + r.width));
+    float cy = fmaxf(r.y, fminf(center.y, r.y + r.height));
+    float dx = cx - center.x, dy = cy - center.y;
+    if (dx * dx + dy * dy > radius * radius)
+      continue;
+    t->destroyed = true;
     destroyed++;
-    CutCollision(lv,r);
+    CutCollision(lv, r);
   }
   return destroyed;
 }

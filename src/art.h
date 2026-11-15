@@ -6,7 +6,6 @@ drawn instead, so the game always runs.
 */
 #ifndef ART_H
 #define ART_H
-
 #include "raylib.h"
 #include <stdbool.h>
 
@@ -42,16 +41,22 @@ typedef struct {
   Rectangle box; // hitbox (sprite is drawn bottom-centred on it)
   float sx, sy;  // squash & stretch scale (1 = normal)
   bool facingRight;
-  bool noDash;     // optional legacy tint flag
-  bool lowStamina; // flash red
+  bool noDash;       // optional legacy tint flag
+  bool lowStamina;   // flash red
   bool chargedFlash; // white flash when bombburst is charged
-  float stamina01; // 0..1, bar is hidden at 1
+  float stamina01;   // 0..1, bar is hidden at 1
 } ArtPlayer;
+
+// Load a PNG with point filtering (crisp pixels). id == 0 if it failed; raylib
+// already logs the reason, so callers only need to test .id.
+Texture2D Art_LoadPointTexture(const char *path);
 
 void Art_Load(void);   // call once after InitWindow + SearchAndSetResourceDir
 void Art_Unload(void); // call before CloseWindow
 
 void Art_UpdatePlayerAnim(AnimId id, float dt); // call once per frame
+float Art_FrameTime(AnimId id, int frame);
+void Art_RestartAnim(void);
 void Art_SetZoom(float zoom); // camera zoom; main.c calls it once per frame
 void Art_DrawPlayer(const ArtPlayer *a);
 // A snapshot of which sprite frame is showing (so a ghost can freeze it).

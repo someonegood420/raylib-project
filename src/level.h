@@ -22,6 +22,8 @@ px in game.
 // differently)
 #define LDTK_COLLISION_LAYER "Collision"
 #define LDTK_PLAYER_START "PlayerStart"
+// Tile layers with exactly this name are destructible (bombs can blow them up).
+#define LDTK_DESTRUCTIBLE_LAYER "Destructible"
 
 #define LEVEL_MAX_TILESETS 8
 #define LEVEL_MAX_ENTITIES 512
@@ -70,9 +72,6 @@ void Level_Unload(Level *lv);
 // Draw all tile layers that are inside `view` (call between BeginMode2D /
 // EndMode2D).
 void Level_Draw(const Level *lv, Rectangle view);
-// Remove destructible tiles near a blast, cutting only those cells from
-// merged collision rectangles; the normal ground tiles are never selected.
-int Level_Explode(Level *lv, Vector2 center, float radius);
 // Remove destructible tiles near a blast, cutting only those cells from
 // merged collision rectangles; the normal ground tiles are never selected.
 int Level_Explode(Level *lv, Vector2 center, float radius);
