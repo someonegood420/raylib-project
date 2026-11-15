@@ -1,0 +1,5 @@
+CompileFlags:
+  Compiler: clang-cl
+  Add:
+    - /std:c11
+    - /IC:/raylib/raylib/src

@@ -1,0 +1,123 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{E9C7FDCE-D52A-8D73-7EB0-C5296AF258F6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{21EB8090-0D4E-1035-B6D3-48EBA215DCB7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files">
+      <UniqueIdentifier>{BAF00917-2652-E724-AFBF-2DD71B201EE4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\fx">
+      <UniqueIdentifier>{07C46A2A-F3BD-937C-DC2A-2A8DC8C3F9E8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\levels">
+      <UniqueIdentifier>{74029537-6012-4108-C9CB-A526B5FA2FA1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\player">
+      <UniqueIdentifier>{B6205D41-A230-0912-0BEA-6D30F718F8AA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\shaders">
+      <UniqueIdentifier>{B3C78F4A-1FD5-BD30-A8BB-B91B14C889E7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game Resource Files\tiles">
+      <UniqueIdentifier>{EA109F76-56D3-D200-9F83-618D0B85ABDE}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Windows Resource Files">
+      <UniqueIdentifier>{6B659E97-575F-C7E9-40CC-5DFA2C652D56}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\art.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\fx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\level.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\resource_dir.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\art.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\fx.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\level.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\main.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="resources\levels\world.ldtk">
+      <Filter>Game Resource Files\levels</Filter>
+    </None>
+    <None Include="resources\shaders\ghost.fs">
+      <Filter>Game Resource Files\shaders</Filter>
+    </None>
+    <None Include="resources\shaders\ripple.fs">
+      <Filter>Game Resource Files\shaders</Filter>
+    </None>
+    <None Include="src\icon.ico">
+      <Filter>Windows Resource Files</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\application.rc">
+      <Filter>Windows Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\fx\speedring.png">
+      <Filter>Game Resource Files\fx</Filter>
+    </Image>
+    <Image Include="resources\player\crouch.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\dash.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\fall.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\glide.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\gun.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\idle.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\jump.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\run.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\wall_climb.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\wall_grab.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\player\wall_slide.png">
+      <Filter>Game Resource Files\player</Filter>
+    </Image>
+    <Image Include="resources\tiles\ground.png">
+      <Filter>Game Resource Files\tiles</Filter>
+    </Image>
+    <Image Include="resources\wabbit_alpha.png">
+      <Filter>Game Resource Files</Filter>
+    </Image>
+  </ItemGroup>
+</Project>
