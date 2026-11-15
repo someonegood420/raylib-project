@@ -216,13 +216,11 @@ Controls
 
 #define BIND_RESPAWN KEY_R
 #define BIND_DEBUG KEY_F1
-#define BIND_PIXEL_MODE KEY_F2 // toggle upscale-first / pixel-first at runtime
 // Pixel-perfect layer mode (F2 toggles it while playing):
 //   false = draw at art resolution, upscale last  (gun rotates on the art-pixel
 //           grid, like Unity's pixel-perfect camera)   <- default
 //   true  = upscale first: draw at full resolution, positions still snapped to
 //           the art-pixel grid (rotated sprites keep smooth full-res edges)
-#define UPSCALE_FIRST_DEFAULT true
 #define REF_W 1280 // the view you designed for = 320 x 180 art pixels
 #define REF_H 720
 #define BIND_RELOAD KEY_F5 // reload the LDtk level without restarting the game
@@ -239,12 +237,10 @@ Controls
 //  The ground's top surface is at tile row GROUND_ROW.
 // =====================================================================
 #define TILE ((float)ART_TILE_PX)
-#define GROUND_ROW 16
-// The ACTIVE level: the LDtk file if it loads, otherwise the built-in test
-// level above.
+// The ACTIVE level: the LDtk file if it loads
+
 #define LEVEL_FILE "levels/world.ldtk" // inside the resources folder
 static Level level;
-static bool levelLoaded = false;
 static Rectangle *solids = NULL;
 static int solidCount = 0;
 #define SOLID_COUNT solidCount
@@ -1066,18 +1062,16 @@ static void DrawDebug(const Player *p) {
 // (Re)load the level from the LDtk file; fall back to the built-in level.
 static void LoadLevel(void) {
   Level_Unload(&level);
-  levelLoaded = Level_Load(&level, LEVEL_FILE, NULL);
+  bool levelLoaded = Level_Load(&level, LEVEL_FILE, NULL);
   solids = level.solids;
   solidCount = level.solidCount;
 
   if (levelLoaded) {
-    solids = level.solids;
-    solidCount = level.solidCount;
     killY = level.height + 512.0f; // a bit below the bottom of the level
     spawnPos = level.hasStart ? (Vector2){level.start.x - PLAYER_W / 2,
                                           level.start.y - STAND_H}
-                              // feet on the PlayerStart's bottom edge
-                              : (Vector2){120, GROUND_ROW * TILE - STAND_H};
+                              // feet on PlayerStart
+                              : (Vector2){0, 0};
   } else {
     TraceLog(LOG_ERROR, "LEVEL: could not load '%s' - the world is empty",
              LEVEL_FILE);
@@ -1089,38 +1083,39 @@ static void LoadLevel(void) {
 
 static void DrawCheckerboardBackground(Camera2D camera, int screenW,
                                        int screenH) {
-  const float cellSize = 32.0f;
-
-  Vector2 topLeft = GetScreenToWorld2D((Vector2){0, 0}, camera);
-  Vector2 bottomRight =
-      GetScreenToWorld2D((Vector2){(float)screenW, (float)screenH}, camera);
-
-  int startX = (int)floorf(topLeft.x / cellSize) - 1;
-  int endX = (int)ceilf(bottomRight.x / cellSize) + 1;
-  int startY = (int)floorf(topLeft.y / cellSize) - 1;
-  int endY = (int)ceilf(bottomRight.y / cellSize) + 1;
-
-  // Dark base behind the checkerboard.
-  ClearBackground((Color){0, 0, 0, 255});
-
-  for (int y = startY; y < endY; y++) {
-    for (int x = startX; x < endX; x++) {
-      Color square =
-          ((x + y) % 2 == 0) ? (Color){0, 0, 0, 255} : (Color){0, 0, 0, 255};
-
-      DrawRectangle((int)(x * cellSize), (int)(y * cellSize), (int)cellSize,
-                    (int)cellSize, square);
-
-      // Bright outlines make bending easier to see.
-      DrawRectangleLines((int)(x * cellSize), (int)(y * cellSize),
-                         (int)cellSize, (int)cellSize, (Color){0, 0, 0, 255});
-    }
-  }
-
-  // Colored world-origin markers help diagnose coordinate offsets.
-  DrawLine(-160, 0, 160, 0, RED);
-  DrawLine(0, -160, 0, 160, GREEN);
-  DrawCircle(0, 0, 5.0f, YELLOW);
+  // const float cellSize = 32.0f;
+  //
+  // Vector2 topLeft = GetScreenToWorld2D((Vector2){0, 0}, camera);
+  // Vector2 bottomRight =
+  //     GetScreenToWorld2D((Vector2){(float)screenW, (float)screenH}, camera);
+  //
+  // int startX = (int)floorf(topLeft.x / cellSize) - 1;
+  // int endX = (int)ceilf(bottomRight.x / cellSize) + 1;
+  // int startY = (int)floorf(topLeft.y / cellSize) - 1;
+  // int endY = (int)ceilf(bottomRight.y / cellSize) + 1;
+  //
+  // // Dark base behind the checkerboard.
+  // ClearBackground((Color){0, 0, 0, 255});
+  //
+  // for (int y = startY; y < endY; y++) {
+  //   for (int x = startX; x < endX; x++) {
+  //     Color square =
+  //         ((x + y) % 2 == 0) ? (Color){0, 0, 0, 255} : (Color){0, 0, 0, 255};
+  //
+  //     DrawRectangle((int)(x * cellSize), (int)(y * cellSize), (int)cellSize,
+  //                   (int)cellSize, square);
+  //
+  //     // Bright outlines make bending easier to see.
+  //     DrawRectangleLines((int)(x * cellSize), (int)(y * cellSize),
+  //                        (int)cellSize, (int)cellSize, (Color){0, 0, 0,
+  //                        255});
+  //   }
+  // }
+  //
+  // // Colored world-origin markers help diagnose coordinate offsets.
+  // DrawLine(-160, 0, 160, 0, RED);
+  // DrawLine(0, -160, 0, 160, GREEN);
+  // DrawCircle(0, 0, 5.0f, YELLOW);
 }
 
 // Manual borderless window: undecorated + sized/positioned to the monitor.
@@ -1175,23 +1170,16 @@ static void DrawPlayerLayer(const Player *pl) {
       (Vector2){pl->box.x + pl->box.width / 2, pl->box.y + pl->box.height / 2},
       pl->aim);
 }
-static void DrawPixelLayerContents(Camera2D cam, int w, int h, Rectangle view,
-                                   const Player *pl, bool withPlayer) {
+static void DrawPixelLayerContents(Camera2D cam, int w, int h, Rectangle view) {
   // --- tiles layer ---
   DrawCheckerboardBackground(cam, w, h);
-  if (levelLoaded && level.tileCount > 0)
-    Level_Draw(&level, view);
+  Level_Draw(&level, view);
 
   // --- fx layer ---
   Fx_DrawPixelLayer(); // ghosts, speed rings, particles
-
-  // --- player layer ---
-  if (withPlayer) {
-    DrawPlayerLayer(pl);
-  }
 }
 
-static void DrawUILayer(const Player *p, int winH, bool upscaleFirst) {
+static void DrawUILayer(const Player *p, int winH) {
   // DrawText("Move/Aim: WASD  |  Fire: U/P  |  Jump: J/Z "
   //          "(hold = higher, again = double, hold in air = glide)",
   //          10, 8, 16, RAYWHITE);
@@ -1208,10 +1196,6 @@ static void DrawUILayer(const Player *p, int winH, bool upscaleFirst) {
   //
   // DrawText(TextFormat("speed:%.2f", fabsf(p->vel.x)), 10, 72, 16, YELLOW);
   //
-  // DrawText(upscaleFirst
-  //              ? "pixel mode: UPSCALE FIRST (full-res draw)"
-  //              : "pixel mode: PIXEL FIRST (low-res draw, upscale last)",
-  //          10, 92, 16, SKYBLUE);
   //
   // DrawFPS(10, winH - 24);
 }
@@ -1240,7 +1224,6 @@ int main(void) {
   // Low-res target for the pixel-perfect layer (sized every frame to the
   // window)
   RenderTexture2D pixelTarget = {0};
-  bool upscaleFirst = UPSCALE_FIRST_DEFAULT;
 
   // Load the refraction shader from resources/shaders/ripple.fs.
   Shader rippleShader = LoadShader(NULL, "shaders/ripple.fs");
@@ -1301,8 +1284,6 @@ int main(void) {
       SetBorderless(!borderless);
     if (IsKeyPressed(BIND_RESPAWN))
       Respawn(&player);
-    if (IsKeyPressed(BIND_PIXEL_MODE))
-      upscaleFirst = !upscaleFirst;
     if (IsKeyPressed(BIND_DEBUG))
       debug = !debug;
     if (IsKeyPressed(BIND_RELOAD)) {
@@ -1404,8 +1385,8 @@ int main(void) {
       sceneTarget = LoadRenderTexture(winW, winH);
       SetTextureFilter(sceneTarget.texture, TEXTURE_FILTER_POINT);
     }
-    if (!upscaleFirst && (pixelTarget.texture.width != lowW ||
-                          pixelTarget.texture.height != lowH)) {
+    if (pixelTarget.texture.width != lowW ||
+        pixelTarget.texture.height != lowH) {
       if (pixelTarget.id != 0)
         UnloadRenderTexture(pixelTarget);
       pixelTarget = LoadRenderTexture(lowW, lowH);
@@ -1416,14 +1397,12 @@ int main(void) {
     // PASS 1 (pixel-first only): PIXEL-PERFECT LAYER into the low-res target
     //         tiles -> fx -> player (+ gun)
     // ------------------------------------------------------------
-    if (!upscaleFirst) {
-      BeginTextureMode(pixelTarget);
-      ClearBackground(BLACK);
-      BeginMode2D(pixelCam);
-      DrawPixelLayerContents(pixelCam, lowW, lowH, pixelView, &view, false);
-      EndMode2D();
-      EndTextureMode();
-    }
+    BeginTextureMode(pixelTarget);
+    ClearBackground(BLACK);
+    BeginMode2D(pixelCam);
+    DrawPixelLayerContents(pixelCam, lowW, lowH, pixelView);
+    EndMode2D();
+    EndTextureMode();
 
     // ------------------------------------------------------------
     // PASS 2: compose the scene at full resolution
@@ -1432,32 +1411,20 @@ int main(void) {
     BeginTextureMode(sceneTarget);
     ClearBackground(BLACK);
 
-    if (upscaleFirst) {
-      // UPSCALE FIRST: draw the pixel layer directly at full resolution
-      // (everything is still placed on the art-pixel grid)
-      Rectangle fullView = {fullCam.target.x - fullCam.offset.x / zoom,
-                            fullCam.target.y - fullCam.offset.y / zoom,
-                            winW / zoom, winH / zoom};
-      BeginMode2D(fullCam);
-      DrawPixelLayerContents(fullCam, winW, winH, fullView, &view, true);
-      EndMode2D();
-    } else {
-      // PIXEL FIRST: blow the low-res target up by an exact integer. Where its
-      // top-left corner lands on screen (whole pixels: the camera target and
-      // offset are integers):
-      Vector2 o =
-          GetWorldToScreen2D((Vector2){pixelView.x, pixelView.y}, fullCam);
-      DrawTexturePro(pixelTarget.texture,
-                     (Rectangle){0, 0, (float)lowW, -(float)lowH},
-                     (Rectangle){o.x, o.y, (float)(lowW * artScale),
-                                 (float)(lowH * artScale)},
-                     (Vector2){0, 0}, 0.0f, WHITE);
-    }
+    // PIXEL FIRST: blow the low-res target up by an exact integer. Where its
+    // top-left corner lands on screen (whole pixels: the camera target and
+    // offset are integers):
+    Vector2 o =
+        GetWorldToScreen2D((Vector2){pixelView.x, pixelView.y}, fullCam);
+    DrawTexturePro(pixelTarget.texture,
+                   (Rectangle){0, 0, (float)lowW, -(float)lowH},
+                   (Rectangle){o.x, o.y, (float)(lowW * artScale),
+                               (float)(lowH * artScale)},
+                   (Vector2){0, 0}, 0.0f, WHITE);
 
     BeginMode2D(fullCam);
-    if (!upscaleFirst)
-      DrawPlayerLayer(&view); // full-res, so squash & stretch is smooth
-    Fx_DrawSmoothLayer();     // dash ribbon
+    DrawPlayerLayer(&view); // full-res, so squash & stretch is smooth
+    Fx_DrawSmoothLayer();   // dash ribbon
     EndMode2D();
     EndTextureMode();
 
@@ -1529,7 +1496,7 @@ int main(void) {
     // ------------------------------------------------------------
     // PASS 5: UI LAYER (normal screen space, no refraction)
     // ------------------------------------------------------------
-    DrawUILayer(&player, winH, upscaleFirst);
+    DrawUILayer(&player, winH);
 
     EndDrawing();
   }

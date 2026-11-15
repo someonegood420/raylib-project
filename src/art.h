@@ -68,7 +68,4 @@ void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
 // Uses resources/player/gun.png if present, otherwise a placeholder bar.
 void Art_DrawGun(Vector2 pivot, Vector2 aim);
 
-// Draw one solid rectangle of the level using the tileset (culled to `view`).
-void Art_DrawSolid(Rectangle r, Rectangle view);
-
 #endif
