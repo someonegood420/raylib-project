@@ -22,7 +22,7 @@ px in game.
 // differently)
 #define LDTK_COLLISION_LAYER "Collision"
 #define LDTK_PLAYER_START "PlayerStart"
-// Tile layers with exactly this name are destructible (bombs can blow them up).
+// Regular Tiles layer named exactly this: manually painted lethal, breakable tiles.
 #define LDTK_DESTRUCTIBLE_LAYER "Destructible"
 
 #define LEVEL_MAX_TILESETS 8
@@ -47,6 +47,10 @@ typedef struct {
   Rectangle *solids;
   int solidCount;
 
+  // One collision rectangle per placed tile in the Destructible Tiles layer.
+  Rectangle *hazards;
+  int hazardCount, hazardCap;
+
   // visuals
   LevelTile *tiles;
   int tileCount, tileCap;
@@ -67,13 +71,17 @@ typedef struct {
 // NULL for the first. Returns false (and logs why) on failure; the Level is
 // left empty and safe to Unload.
 bool Level_Load(Level *lv, const char *ldtkPath, const char *levelId);
+// List level identifiers for the selector (up to capacity names).
+int Level_List(const char *path, char names[][64], int capacity);
 void Level_Unload(Level *lv);
 
 // Draw all tile layers that are inside `view` (call between BeginMode2D /
 // EndMode2D).
 void Level_Draw(const Level *lv, Rectangle view);
-// Remove destructible tiles near a blast, cutting only those cells from
-// merged collision rectangles; the normal ground tiles are never selected.
+// Checks only active destructible cells (independent from permanent solids).
+bool Level_TouchesDestructible(const Level *lv, Rectangle box);
+// Remove destructible tile hitboxes and manually painted graphics.
+// Permanent Collision cells are never changed.
 int Level_Explode(Level *lv, Vector2 center, float radius);
 
 #endif

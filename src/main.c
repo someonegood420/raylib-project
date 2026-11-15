@@ -218,6 +218,7 @@ Controls
 
 #define LEVEL_FILE "levels/world.ldtk" // inside the resources folder
 static Level level;
+static char selectedLevel[64] = "";
 static Rectangle *solids = NULL;
 static int solidCount = 0;
 #define SOLID_COUNT solidCount
@@ -250,9 +251,6 @@ typedef struct {
 static Bomb bombs[BOMB_MAX];
 static void ExplodeAt(Vector2 pos) {
   Level_Explode(&level, pos, BOMB_BLAST_RADIUS);
-  // The collision array may be reallocated when merged IntGrid solids split.
-  solids = level.solids;
-  solidCount = level.solidCount;
   Fx_Event(FX_EXPLOSION, (Rectangle){pos.x - 8, pos.y - 8, 16, 16}, (Vector2){0, -1});
   shakeTime = SHAKE_DURATION;
 }
@@ -283,7 +281,8 @@ static void TickBombs(float dt) {
     for (int k = 0; k < steps; ++k) {
       b->pos.x += move.x / steps;
       b->pos.y += move.y / steps;
-      if (FirstSolidHit((Rectangle){b->pos.x - 7, b->pos.y - 7, 14, 14}) >= 0) {
+      Rectangle bombBox = {b->pos.x - 7, b->pos.y - 7, 14, 14};
+      if (FirstSolidHit(bombBox) >= 0 || Level_TouchesDestructible(&level, bombBox)) {
         hit = true;
         break;
       }
@@ -418,6 +417,10 @@ static bool MoveAxis(Player *p, float amount, bool horizontal) {
     else
       next.y += step;
 
+    if (Level_TouchesDestructible(&level, next)) {
+      p->box = next; // record contact for UpdatePlayer to respawn immediately
+      return true;
+    }
     int i = FirstSolidHit(next);
     if (i < 0) {
       p->box = next;
@@ -438,7 +441,7 @@ static bool MoveAxis(Player *p, float amount, bool horizontal) {
 // =====================================================================
 //  ACTIONS
 // =====================================================================
-static void DoJump(Player *p) {
+static void Jump(Player *p) {
   bool onGround = p->lastOnGround > 0; //
   p->lastPressedJump = 0;
   p->lastOnGround = 0;
@@ -456,7 +459,7 @@ static void DoJump(Player *p) {
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
-static void DoWallJump(Player *p, int dir, bool climbJump, float cost) {
+static void WallJump(Player *p, int dir, bool climbJump, float cost) {
   p->lastPressedJump = 0;
   p->lastOnGround = 0;
   p->lastOnWall = p->lastOnWallL = p->lastOnWallR = 0;
@@ -568,6 +571,10 @@ static void Run(Player *p, float lerpAmount, float dt) {
 //  UPDATE  (one fixed physics step)
 // =====================================================================
 static void UpdatePlayer(Player *p, float dt) {
+  if (Level_TouchesDestructible(&level, p->box)) {
+    Respawn(p);
+    return;
+  }
   // ---------- timers ----------
   p->lastOnGround -= dt;
   p->lastOnWall -= dt;
@@ -718,9 +725,9 @@ static void UpdatePlayer(Player *p, float dt) {
     float cost = climbJump ? CLIMB_JUMP_COST : WALL_JUMP_COST;
 
     if (p->lastOnWall > 0 && p->lastOnGround <= 0) // works even with no stamina
-      DoWallJump(p, dir, climbJump, cost);
+      WallJump(p, dir, climbJump, cost);
     else if (p->jumpsLeft > 0 && (ALLOW_JUMP_WHILE_RISING || !p->jumping))
-      DoJump(p);
+      Jump(p);
   }
 
   // ---------- wall grab ----------
@@ -825,7 +832,15 @@ static void UpdatePlayer(Player *p, float dt) {
 
   // ---------- move + collide (X then Y) ----------
   bool hitX = MoveAxis(p, p->vel.x * dt, true);
+  if (Level_TouchesDestructible(&level, p->box)) {
+    Respawn(p);
+    return;
+  }
   bool hitY = MoveAxis(p, p->vel.y * dt, false);
+  if (Level_TouchesDestructible(&level, p->box)) {
+    Respawn(p);
+    return;
+  }
   if (hitX)
     p->vel.x = 0.0f;
   if (hitY)
@@ -952,6 +967,8 @@ static ArtPlayer MakeArtPlayer(const Player *p) {
 static void DrawDebug(const Player *p) {
   for (int i = 0; i < SOLID_COUNT; i++)
     DrawRectangleLinesEx(solids[i], 1, (Color){255, 255, 255, 90});
+  for (int i = 0; i < level.hazardCount; i++)
+    DrawRectangleLinesEx(level.hazards[i], 2, RED);
   DrawRectangleLinesEx(p->box, 1, LIME);
   DrawRectangleRec((Rectangle){p->box.x + 3, p->box.y + p->box.height, p->box.width - 6, PROBE},
                    GREEN);
@@ -963,7 +980,7 @@ static void DrawDebug(const Player *p) {
 // (Re)load the level from the LDtk file; fall back to the built-in level.
 static void LoadLevel(void) {
   Level_Unload(&level);
-  bool levelLoaded = Level_Load(&level, LEVEL_FILE, NULL);
+  bool levelLoaded = Level_Load(&level, LEVEL_FILE, selectedLevel[0] ? selectedLevel : NULL);
   solids = level.solids;
   solidCount = level.solidCount;
 
@@ -1097,6 +1114,29 @@ static void DrawUILayer(const Player *p, int winH) {
   // DrawFPS(10, winH - 24);
 }
 
+// Minimal Raylib menus: all UI uses screen coordinates and the default font.
+typedef enum { MENU_MAIN, MENU_LEVELS, MENU_PLAY, MENU_PAUSE } Menu;
+static bool MenuButton(const char *text, int y) {
+  int w = GetScreenWidth(), x = w / 2 - 140;
+  Rectangle r = {(float)x, (float)y, 280, 44};
+  bool hover = CheckCollisionPointRec(GetMousePosition(), r);
+  DrawRectangleRec(r, hover ? (Color){30, 30, 30, 255} : (Color){20, 20, 20, 255});
+  DrawRectangleLinesEx(r, 2, hover ? WHITE : GRAY);
+  DrawText(text, w / 2 - MeasureText(text, 20) / 2, y + 12, 20, WHITE);
+  return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+}
+
+// Return clicked button index (1-based), or 0 if nothing was clicked.
+static int DrawMenu(const char *title, const char *items[], int count, int firstY) {
+  int w = GetScreenWidth();
+  DrawText(title, w / 2 - MeasureText(title, 36) / 2, firstY - 85, 36, RAYWHITE);
+  int chosen = 0;
+  for (int i = 0; i < count; ++i)
+    if (MenuButton(items[i], firstY + i * 55))
+      chosen = i + 1;
+  return chosen;
+}
+
 // =====================================================================
 //  MAIN
 // =====================================================================
@@ -1105,6 +1145,7 @@ int main(void) {
   // window-style change (= no blinking) after the window is created.
   SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_UNDECORATED);
   InitWindow(1280, 720, "KnockBack Velocity");
+  SetExitKey(KEY_NULL); // Esc opens/closes menus instead of quitting
   SetBorderless(true);
   int SCREEN_W = GetScreenWidth();
   int SCREEN_H = GetScreenHeight();
@@ -1161,6 +1202,10 @@ int main(void) {
 
   Player player;
   Respawn(&player);
+  char levelNames[64][64] = {{0}};
+  int levelCount = Level_List(LEVEL_FILE, levelNames, 64);
+  int levelPage = 0;
+  Menu menu = MENU_MAIN;
 
   Camera2D cam = {0};
   cam.offset = (Vector2){SCREEN_W / 2.0f, SCREEN_H / 2.0f};
@@ -1172,22 +1217,98 @@ int main(void) {
   Vector2 prev = {player.box.x, player.box.y}; // position after the previous step
   while (!WindowShouldClose()) {
     float frameDt = fminf(GetFrameTime(), 0.05f);
+    // Esc pauses gameplay; Esc from a menu goes back or resumes.
+    if (IsKeyPressed(KEY_ESCAPE)) {
+      if (menu == MENU_PLAY)
+        menu = MENU_PAUSE;
+      else if (menu == MENU_PAUSE)
+        menu = MENU_PLAY;
+      else if (menu == MENU_LEVELS)
+        menu = MENU_MAIN;
+    }
+    // Render main/level menus without advancing or drawing the game world.
+    if (menu == MENU_MAIN || menu == MENU_LEVELS) {
+      BeginDrawing();
+      ClearBackground((Color){0, 0, 0, 255});
+      int top = GetScreenHeight() / 2 - 40;
+      if (menu == MENU_MAIN) {
+        const char *items[] = {"Play", "Level Select", "Quit"};
+        int choice = DrawMenu("KNOCKBACK VELOCITY", items, 3, top);
+        if (choice == 1) {
+          LoadLevel();
+          Respawn(&player);
+          acc = 0.0f;
+          prev = (Vector2){player.box.x, player.box.y};
+          menu = MENU_PLAY;
+        }
+        if (choice == 2) {
+          levelPage = 0;
+          menu = MENU_LEVELS;
+        }
+        if (choice == 3) {
+          EndDrawing();
+          break;
+        }
+      } else {
+        const char *items[10];
+        int shown = levelCount - levelPage * 7;
+        if (shown > 7)
+          shown = 7;
+        if (shown < 0)
+          shown = 0;
+        for (int i = 0; i < shown; ++i)
+          items[i] = levelNames[levelPage * 7 + i];
+        if (shown == 0)
+          DrawText("No levels found in world.ldtk", GetScreenWidth() / 2 - 175, top, 20, GRAY);
+        if (levelPage > 0)
+          items[shown++] = "Previous Page";
+        if ((levelPage + 1) * 7 < levelCount)
+          items[shown++] = "Next Page";
+        items[shown++] = "Back";
+        int action =
+            DrawMenu("SELECT LEVEL", items, shown, (GetScreenHeight() - shown * 55) / 2 + 10);
+        if (action > 0) {
+          int idx = action - 1;
+          int onPage = levelCount - levelPage * 7;
+          if (onPage > 7)
+            onPage = 7;
+          if (idx < onPage) {
+            snprintf(selectedLevel, sizeof selectedLevel, "%s", levelNames[levelPage * 7 + idx]);
+            LoadLevel();
+            Respawn(&player);
+            acc = 0.0f;
+            prev = (Vector2){player.box.x, player.box.y};
+            menu = MENU_PLAY;
+          } else if (levelPage > 0 && idx == onPage)
+            levelPage--;
+          else if ((levelPage + 1) * 7 < levelCount && idx == onPage + (levelPage > 0))
+            levelPage++;
+          else
+            menu = MENU_MAIN;
+        }
+      }
+      EndDrawing();
+      continue;
+    }
+    bool playing = menu == MENU_PLAY;
 
     if (IsKeyPressed(KEY_F11))
       SetBorderless(!borderless);
-    if (IsKeyPressed(BIND_RESPAWN))
+    if (playing && IsKeyPressed(BIND_RESPAWN))
       Respawn(&player);
-    if (IsKeyPressed(BIND_DEBUG))
+    if (playing && IsKeyPressed(BIND_DEBUG))
       debug = !debug;
-    if (IsKeyPressed(BIND_RELOAD)) {
+    if (playing && IsKeyPressed(BIND_RELOAD)) {
       LoadLevel();
       Respawn(&player);
     }
 
-    ReadInput(&player);
+    if (playing)
+      ReadInput(&player);
 
     // fixed-timestep physics meaning predictable movement at any framerate
-    acc += frameDt;
+    if (playing)
+      acc += frameDt;
     while (acc >= PHYSICS_DT) {
       prev = (Vector2){player.box.x, player.box.y}; // <-- new
       if (player.hitstop > 0.0f)
@@ -1208,7 +1329,8 @@ int main(void) {
     cam.target.x = floorf((view.box.x + view.box.width / 2) / ART_PIXEL) * ART_PIXEL;
     cam.target.y = floorf((view.box.y + view.box.height) / ART_PIXEL) * ART_PIXEL - 40;
 
-    Art_UpdatePlayerAnim(ChooseAnim(&player), frameDt);
+    if (playing)
+      Art_UpdatePlayerAnim(ChooseAnim(&player), frameDt);
 
     // follow the REAL window size (high-DPI / resized windows are bigger than
     // SCREEN_W x SCREEN_H)
@@ -1234,7 +1356,7 @@ int main(void) {
     // the non-pixel layer, the ripple and the debug overlay.
     Camera2D fullCam = cam;
     fullCam.target = (Vector2){roundf(cam.target.x), roundf(cam.target.y)};
-    if (shakeTime > 0.0f) { // dash camera shake (whole pixels, fades out)
+    if (playing && shakeTime > 0.0f) { // dash camera shake (whole pixels, fades out)
       shakeTime -= frameDt;
       int amp = (int)(SHAKE_AMPLITUDE * fmaxf(shakeTime, 0.0f) / SHAKE_DURATION + 0.5f);
       if (amp > 0) {
@@ -1370,6 +1492,26 @@ int main(void) {
     // PASS 5: UI LAYER (normal screen space, no refraction)
     // ------------------------------------------------------------
     DrawUILayer(&player, winH);
+    if (menu == MENU_PAUSE) {
+      DrawRectangle(0, 0, winW, winH, (Color){10, 12, 25, 195});
+      const char *items[] = {"Resume", "Restart", "Level Select", "Main Menu"};
+      int action = DrawMenu("PAUSED", items, 4, winH / 2 - 65);
+      if (action == 1)
+        menu = MENU_PLAY;
+      if (action == 2) {
+        LoadLevel();
+        Respawn(&player);
+        acc = 0;
+        prev = (Vector2){player.box.x, player.box.y};
+        menu = MENU_PLAY;
+      }
+      if (action == 3) {
+        levelPage = 0;
+        menu = MENU_LEVELS;
+      }
+      if (action == 4)
+        menu = MENU_MAIN;
+    }
 
     EndDrawing();
   }

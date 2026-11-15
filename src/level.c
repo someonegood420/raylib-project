@@ -162,6 +162,21 @@ static void AddTile(Level *lv, LevelTile t) {
     lv->tileCap = cap;
   }
   lv->tiles[lv->tileCount++] = t;
+  // Manually painted Destructible tiles are lethal and block bombs.
+  if (t.destructible) {
+    if (lv->hazardCount == lv->hazardCap) {
+      int cap = lv->hazardCap ? lv->hazardCap * 2 : 64;
+      Rectangle *rects = realloc(lv->hazards, (size_t)cap * sizeof *rects);
+      if (!rects) {
+        lv->tileCount--;
+        return;
+      }
+      lv->hazards = rects;
+      lv->hazardCap = cap;
+    }
+    lv->hazards[lv->hazardCount++] =
+        (Rectangle){t.px * SCALE, t.py * SCALE, t.size * SCALE, t.size * SCALE};
+  }
 }
 
 static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size, int offX, int offY,
@@ -366,7 +381,7 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const
       coll = list[i];
       break;
     }
-    if (coll < 0)
+    if (coll < 0 && !Is(j, list[i], "__identifier", LDTK_DESTRUCTIBLE_LAYER))
       coll = list[i];
   }
   if (coll >= 0) {
@@ -378,6 +393,12 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const
     TraceLog(LOG_WARNING, "LEVEL: no IntGrid layer named '%s' - nothing is solid!",
              LDTK_COLLISION_LAYER);
 
+  // Destructible is a regular Tiles layer: collision comes from its painted tiles.
+  for (int i = 0; i < n; i++)
+    if (Is(j, list[i], "__identifier", LDTK_DESTRUCTIBLE_LAYER) &&
+        !Is(j, list[i], "__type", "Tiles"))
+      TraceLog(LOG_WARNING, "LEVEL: 'Destructible' must be a Tiles layer");
+
   // 2) tiles + entities. LDtk lists layers top-most first, so draw them in
   // reverse.
   for (int i = n - 1; i >= 0; i--) {
@@ -388,7 +409,8 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const
     if (Str(j, layer, "__tilesetRelPath", rel, sizeof rel)[0]) {
       int tex = GetTexture(lv, dir, rel);
       if (tex >= 0) {
-        bool destructible = Is(j, layer, "__identifier", LDTK_DESTRUCTIBLE_LAYER);
+        bool destructible = Is(j, layer, "__identifier", LDTK_DESTRUCTIBLE_LAYER) &&
+                            Is(j, layer, "__type", "Tiles");
         AddTiles(lv, j, Get(j, layer, "autoLayerTiles"), tex, gs, ox, oy, destructible);
         AddTiles(lv, j, Get(j, layer, "gridTiles"), tex, gs, ox, oy, destructible);
       }
@@ -404,6 +426,22 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const
 
   free(list);
   return true;
+}
+
+int Level_List(const char *path, char names[][64], int capacity) {
+  Json j;
+  if (!JsonLoad(&j, path))
+    return 0;
+  int count = 0;
+  EACH((&j), Get(&j, 0, "levels"), l) {
+    if (count >= capacity)
+      break;
+    Str(&j, l, "identifier", names[count], 64);
+    if (names[count][0])
+      count++;
+  }
+  JsonFree(&j);
+  return count;
 }
 
 bool Level_Load(Level *lv, const char *path, const char *levelId) {
@@ -427,6 +465,7 @@ bool Level_Load(Level *lv, const char *path, const char *levelId) {
 
 void Level_Unload(Level *lv) {
   free(lv->solids);
+  free(lv->hazards);
   free(lv->tiles);
   for (int i = 0; i < lv->texCount; i++)
     UnloadTexture(lv->tex[i]);
@@ -450,53 +489,38 @@ void Level_Draw(const Level *lv, Rectangle view) {
   }
 }
 
-// Remove a tile-sized rectangle from all merged IntGrid collision rectangles.
-// Splitting into non-overlapping pieces preserves the rest of the solid.
-static void CutCollision(Level *lv, Rectangle cut) {
-  int oldCount = lv->solidCount;
-  Rectangle *old = lv->solids;
-  Rectangle *next = malloc((size_t)(oldCount * 4 + 4) * sizeof(Rectangle));
-  if (!next)
-    return;
-  int count = 0;
-  for (int i = 0; i < oldCount; ++i) {
-    Rectangle s = old[i];
-    float x0 = fmaxf(s.x, cut.x), x1 = fminf(s.x + s.width, cut.x + cut.width);
-    float y0 = fmaxf(s.y, cut.y), y1 = fminf(s.y + s.height, cut.y + cut.height);
-    if (x0 >= x1 || y0 >= y1) {
-      next[count++] = s;
-      continue;
-    }
-    if (y0 > s.y)
-      next[count++] = (Rectangle){s.x, s.y, s.width, y0 - s.y};
-    if (y1 < s.y + s.height)
-      next[count++] = (Rectangle){s.x, y1, s.width, s.y + s.height - y1};
-    if (x0 > s.x)
-      next[count++] = (Rectangle){s.x, y0, x0 - s.x, y1 - y0};
-    if (x1 < s.x + s.width)
-      next[count++] = (Rectangle){x1, y0, s.x + s.width - x1, y1 - y0};
-  }
-  free(old);
-  lv->solids = next;
-  lv->solidCount = count;
+// Destructible cells never merge with ordinary Collision ground.
+bool Level_TouchesDestructible(const Level *lv, Rectangle box) {
+  for (int i = 0; i < lv->hazardCount; i++)
+    if (CheckCollisionRecs(box, lv->hazards[i]))
+      return true;
+  return false;
 }
 
 int Level_Explode(Level *lv, Vector2 center, float radius) {
   int destroyed = 0;
-  for (int i = 0; i < lv->tileCount; ++i) {
-    LevelTile *t = &lv->tiles[i];
-    if (!t->destructible || t->destroyed)
+  for (int i = 0; i < lv->hazardCount;) {
+    Rectangle r = lv->hazards[i];
+    float x = fmaxf(r.x, fminf(center.x, r.x + r.width));
+    float y = fmaxf(r.y, fminf(center.y, r.y + r.height));
+    if ((x - center.x) * (x - center.x) + (y - center.y) * (y - center.y) > radius * radius) {
+      i++;
       continue;
-    float s = t->size * SCALE;
-    Rectangle r = {t->px * SCALE, t->py * SCALE, s, s};
-    float cx = fmaxf(r.x, fminf(center.x, r.x + r.width));
-    float cy = fmaxf(r.y, fminf(center.y, r.y + r.height));
-    float dx = cx - center.x, dy = cy - center.y;
-    if (dx * dx + dy * dy > radius * radius)
-      continue;
-    t->destroyed = true;
+    }
+
+    // Hide the corresponding manually painted destructible tile, not regular ground.
+    for (int t = 0; t < lv->tileCount; t++) {
+      LevelTile *tile = &lv->tiles[t];
+      if (!tile->destructible || tile->destroyed)
+        continue;
+      float size = tile->size * SCALE;
+      Vector2 midpoint = {tile->px * SCALE + size * 0.5f, tile->py * SCALE + size * 0.5f};
+      if (CheckCollisionPointRec(midpoint, r))
+        tile->destroyed = true;
+    }
+    // Swap-remove; no stale collision rectangles, no changing permanent solids.
+    lv->hazards[i] = lv->hazards[--lv->hazardCount];
     destroyed++;
-    CutCollision(lv, r);
   }
   return destroyed;
 }

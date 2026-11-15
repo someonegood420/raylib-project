@@ -170,7 +170,7 @@ void Fx_Reset(void) {
 // =====================================================================
 //  EVENTS
 // =====================================================================
-void Fx_Event(FxEvent e, Rectangle box, Vector2 dir, bool facingRight) {
+void Fx_Event(FxEvent e, Rectangle box, Vector2 dir) {
   Vector2 c = Center(box);
 
   switch (e) {
