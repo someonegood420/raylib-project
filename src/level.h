@@ -32,6 +32,7 @@ typedef struct {
   int size;           // tile size (the layer's grid size)
   unsigned char flip; // bit0 = flip X, bit1 = flip Y
   unsigned char tex;  // index into Level.tex
+  bool destructible, destroyed; // destructivetileset only
 } LevelTile;
 
 typedef struct {
@@ -69,5 +70,11 @@ void Level_Unload(Level *lv);
 // Draw all tile layers that are inside `view` (call between BeginMode2D /
 // EndMode2D).
 void Level_Draw(const Level *lv, Rectangle view);
+// Remove destructible tiles near a blast, cutting only those cells from
+// merged collision rectangles; the normal ground tiles are never selected.
+int Level_Explode(Level *lv, Vector2 center, float radius);
+// Remove destructible tiles near a blast, cutting only those cells from
+// merged collision rectangles; the normal ground tiles are never selected.
+int Level_Explode(Level *lv, Vector2 center, float radius);
 
 #endif

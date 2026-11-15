@@ -7,6 +7,7 @@ Uses jsmn (jsmn.h, MIT license) to tokenize the .ldtk file.
 #include "jsmn.h"
 #include "level.h"
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -174,7 +175,7 @@ static void AddTile(Level *lv, LevelTile t) {
 }
 
 static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size,
-                     int offX, int offY) {
+                      int offX, int offY, bool destructible) {
   EACH(j, arr, t) {
     int px = Get(j, t, "px"), src = Get(j, t, "src");
     LevelTile lt;
@@ -185,6 +186,8 @@ static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size,
     lt.size = size;
     lt.flip = (unsigned char)((int)Num(j, t, "f", 0) & 3);
     lt.tex = (unsigned char)tex;
+    lt.destructible = destructible;
+    lt.destroyed = false;
     AddTile(lv, lt);
   }
 }
@@ -404,8 +407,15 @@ static bool Fill(Level *lv, const Json *root, Json *ext, const char *path,
     if (Str(j, layer, "__tilesetRelPath", rel, sizeof rel)[0]) {
       int tex = GetTexture(lv, dir, rel);
       if (tex >= 0) {
-        AddTiles(lv, j, Get(j, layer, "autoLayerTiles"), tex, gs, ox, oy);
-        AddTiles(lv, j, Get(j, layer, "gridTiles"), tex, gs, ox, oy);
+        // Identify by LDtk layer name OR tileset filename.
+        // Naming the layer "Destructible" is recommended.
+        char layerId[128];
+        Str(j, layer, "__identifier", layerId, sizeof layerId);
+        bool destructible = strstr(layerId, "Destructible") != NULL ||
+                            strstr(layerId, "destructible") != NULL ||
+                            strstr(rel, "destructivetileset") != NULL;
+        AddTiles(lv, j, Get(j, layer, "autoLayerTiles"), tex, gs, ox, oy, destructible);
+        AddTiles(lv, j, Get(j, layer, "gridTiles"), tex, gs, ox, oy, destructible);
       }
     }
     if (Is(j, layer, "__type", "Entities"))
@@ -452,6 +462,7 @@ void Level_Unload(Level *lv) {
 void Level_Draw(const Level *lv, Rectangle view) {
   for (int i = 0; i < lv->tileCount; i++) {
     const LevelTile *t = &lv->tiles[i];
+    if (t->destroyed) continue;
     float s = t->size * SCALE;
     Rectangle dst = {t->px * SCALE, t->py * SCALE, s, s};
     if (dst.x + s < view.x || dst.x > view.x + view.width ||
@@ -463,4 +474,45 @@ void Level_Draw(const Level *lv, Rectangle view) {
                      (t->flip & 2) ? -(float)t->size : (float)t->size};
     DrawTexturePro(lv->tex[t->tex], src, dst, (Vector2){0, 0}, 0.0f, WHITE);
   }
+}
+
+// Remove a tile-sized rectangle from all merged IntGrid collision rectangles.
+// Splitting into non-overlapping pieces preserves the rest of the solid.
+static void CutCollision(Level *lv, Rectangle cut) {
+  int oldCount = lv->solidCount;
+  Rectangle *old = lv->solids;
+  Rectangle *next = malloc((size_t)(oldCount * 4 + 4) * sizeof(Rectangle));
+  if (!next) return;
+  int count = 0;
+  for (int i=0; i<oldCount; ++i) {
+    Rectangle s=old[i];
+    float x0=fmaxf(s.x,cut.x), x1=fminf(s.x+s.width,cut.x+cut.width);
+    float y0=fmaxf(s.y,cut.y), y1=fminf(s.y+s.height,cut.y+cut.height);
+    if (x0>=x1 || y0>=y1) { next[count++]=s; continue; }
+    if (y0>s.y) next[count++]=(Rectangle){s.x,s.y,s.width,y0-s.y};
+    if (y1<s.y+s.height) next[count++]=(Rectangle){s.x,y1,s.width,s.y+s.height-y1};
+    if (x0>s.x) next[count++]=(Rectangle){s.x,y0,x0-s.x,y1-y0};
+    if (x1<s.x+s.width) next[count++]=(Rectangle){x1,y0,s.x+s.width-x1,y1-y0};
+  }
+  free(old);
+  lv->solids=next;
+  lv->solidCount=count;
+}
+
+int Level_Explode(Level *lv, Vector2 center, float radius) {
+  int destroyed=0;
+  for (int i=0; i<lv->tileCount; ++i) {
+    LevelTile *t=&lv->tiles[i];
+    if (!t->destructible || t->destroyed) continue;
+    float s=t->size*SCALE;
+    Rectangle r={t->px*SCALE,t->py*SCALE,s,s};
+    float cx=fmaxf(r.x,fminf(center.x,r.x+r.width));
+    float cy=fmaxf(r.y,fminf(center.y,r.y+r.height));
+    float dx=cx-center.x,dy=cy-center.y;
+    if (dx*dx+dy*dy>radius*radius) continue;
+    t->destroyed=true;
+    destroyed++;
+    CutCollision(lv,r);
+  }
+  return destroyed;
 }

@@ -26,8 +26,8 @@ int Fx_GetRippleData(Vector2 centers[FX_RIPPLE_CAPACITY],
 typedef enum {
   FX_JUMP,       // jump puff at the feet
   FX_WALL_JUMP,  // puff on the wall side; dir.x = direction you jump
-  FX_DASH_START, // ghost trail + ripple
-  FX_GUN         // muzzle burst; dir = aim direction
+  FX_DASH_START, // burst ghost trail + ripple
+  FX_EXPLOSION  // bomb impact blast: particles + ripple
 } FxEvent;
 
 typedef struct {

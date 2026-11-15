@@ -25,14 +25,15 @@ drawn instead, so the game always runs.
 typedef enum {
   ANIM_IDLE,
   ANIM_RUN,
-  ANIM_JUMP, // rising
-  ANIM_FALL, // falling
-  ANIM_DASH,
+  ANIM_JUMP,
+  ANIM_FALL,
   ANIM_WALL_SLIDE,
-  ANIM_WALL_GRAB,  // holding the wall, not moving
-  ANIM_WALL_CLIMB, // holding the wall, moving up/down
+  ANIM_WALL_GRAB,
+  ANIM_WALL_CLIMB,
   ANIM_CROUCH,
-  ANIM_GLIDE,
+  ANIM_THROW_GROUND,
+  ANIM_THROW_AIR,
+  ANIM_BOMB_DIVE,
   ANIM_COUNT
 } AnimId;
 
@@ -41,9 +42,9 @@ typedef struct {
   Rectangle box; // hitbox (sprite is drawn bottom-centred on it)
   float sx, sy;  // squash & stretch scale (1 = normal)
   bool facingRight;
-  bool noDash;     // dash used up
+  bool noDash;     // optional legacy tint flag
   bool lowStamina; // flash red
-  bool gliding;    // (placeholder only) draw a parachute
+  bool chargedFlash; // white flash when bombburst is charged
   float stamina01; // 0..1, bar is hidden at 1
 } ArtPlayer;
 
@@ -62,10 +63,7 @@ ArtFrame Art_CurrentFrame(void);
 void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
                    Color tint); // dash afterimage
 
-// The gun: rotates around `pivot` (world px) to point along `aim` (unit
-// vector). Drawn into the pixel-perfect layer, so the rotation is quantised to
-// the low-res pixel grid, like Unity's pixel-perfect camera.
-// Uses resources/player/gun.png if present, otherwise a placeholder bar.
-void Art_DrawGun(Vector2 pivot, Vector2 aim);
+// Throwable bomb drawn in the full-resolution world layer.
+void Art_DrawBomb(Vector2 center, float angle);
 
 #endif

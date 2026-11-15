@@ -1,16 +1,20 @@
 /*
-art.c - pixel-art sprites, animations and tilesets.
-
-FOLDER LAYOUT (relative to the "resources" folder):
-    resources/player/idle.png        <- horizontal strips, one file per
-animation resources/player/run.png resources/tiles/ground.png       <- 3x3
-tileset (see below)
-
-Every file is optional. Missing file = coloured placeholder.
-*/
+ * art.c - player animations loaded from individually sliced PNG frames.
+ *
+ * All animations use the same layout relative to resources/:
+ *   player/idle/1.png
+ *   player/run/1.png ... player/run/12.png
+ *   player/throw_ground/1.png ... player/throw_ground/5.png
+ *   player/throw_air/1.png ... player/throw_air/5.png (optional)
+ *   player/bomb_dive/1.png ... player/bomb_dive/3.png
+ *
+ * Air-throw frames fall back to their corresponding ground-throw frames.
+ * Keep every frame of an animation on an identically-sized transparent canvas.
+ */
 
 #include "art.h"
 #include <math.h>
+#include <stdio.h>
 
 // =====================================================================
 //  CONFIG  (edit these)
@@ -21,62 +25,49 @@ Every file is optional. Missing file = coloured placeholder.
   0 // nudge the sprite relative to the hitbox (screen px, +x = forward)
 #define SPRITE_OFFSET_Y 0 // +y = down
 
-#define HSTRIP_SWAP_ENDS                                                       \
-  false // true if your horizontal strip's left/right end caps came out mirrored
-
-//[NOTE] DEAD CODE START
-// ---- gun ----
-#define GUN_FILE "player/gun.png" // single frame, drawn pointing RIGHT
-#define GUN_PIVOT_X 2             // art px from the sprite's left edge
-#define GUN_PIVOT_Y 2 // art px from the sprite's top edge (put it on the grip)
-#define GUN_OFFSET_Y -2 // art px: where the pivot sits relative to box centre
-#define GUN_PLACEHOLDER_W 8 // art px
-#define GUN_PLACEHOLDER_H 3 // art px
-//[NOTE] DEAD CODE END
-
 // The pixel-perfect layer needs sprites on the same grid as the tiles.
 _Static_assert(SPRITE_SCALE == ART_PIXEL,
                "SPRITE_SCALE must equal ART_TILE_SCALE for pixel-perfect");
 
 #define TINT_SPRITE_WHEN_NO_DASH                                               \
-  false // true = sprites turn blue after dashing (placeholder always does)
+  false // optional blue tint after consuming burst charge
 
-// ---------------------------------------------------------------------
-//  ANIMATION TABLE
-//  Each animation is ONE PNG: all frames side by side in a single row,
-//  every frame the same size. frame width = image width / frames.
-//  Keep the character's FEET on the bottom edge of the frame.
-// ---------------------------------------------------------------------
+// =====================================================================
+//  ANIMATION DEFINITIONS
+//  One animation = one folder; frames are 1.png, 2.png, ...
+// =====================================================================
+#define MAX_ANIM_FRAMES 16
+
 typedef struct {
-  const char *file; // path inside resources/
-  int frames;       // number of frames in the strip
-  float fps;        // playback speed
-  bool loop;        // false = hold the last frame
+  const char *folder;
+  int frameCount;
+  float fps;
+  bool loop;
 } AnimDef;
 
 static const AnimDef animDefs[ANIM_COUNT] = {
-    [ANIM_IDLE] = {"player/idle.png", 1, 6, true},
-    [ANIM_RUN] = {"player/run.png", 12, 12, true},
-    [ANIM_JUMP] = {"player/jump.png", 6, 8, false},
-    [ANIM_FALL] = {"player/fall.png", 1, 8, true},
-    [ANIM_DASH] = {"player/dash.png", 4, 12, false},
-    [ANIM_WALL_SLIDE] = {"player/wall_slide.png", 1, 8, true},
-    [ANIM_WALL_GRAB] = {"player/wall_grab.png", 1, 1, true},
-    [ANIM_WALL_CLIMB] = {"player/wall_climb.png", 6, 10, true},
-    [ANIM_CROUCH] = {"player/crouch.png", 1, 1, true},
-    [ANIM_GLIDE] = {"player/glide.png", 2, 6, true},
+    [ANIM_IDLE] = {"player/idle", 1, 6, true},
+    [ANIM_RUN] = {"player/run", 12, 12, true},
+    [ANIM_JUMP] = {"player/jump", 6, 8, false},
+    [ANIM_FALL] = {"player/fall", 1, 8, true},
+    [ANIM_WALL_SLIDE] = {"player/wall_slide", 1, 8, true},
+    [ANIM_WALL_GRAB] = {"player/wall_grab", 1, 1, true},
+    [ANIM_WALL_CLIMB] = {"player/wall_climb", 6, 10, true},
+    [ANIM_CROUCH] = {"player/crouch", 1, 1, true},
+    [ANIM_THROW_GROUND] = {"player/throw_ground", 5, 12, false},
+    [ANIM_THROW_AIR] = {"player/throw_air", 5, 12, false},
+    [ANIM_BOMB_DIVE] = {"player/bomb_dive", 3, 12, false},
 };
 
-// =====================================================================
-//  STATE
-// =====================================================================
-static Texture2D animTex[ANIM_COUNT];
-static bool animOk[ANIM_COUNT];
+typedef struct {
+  Texture2D frames[MAX_ANIM_FRAMES];
+  bool owned[MAX_ANIM_FRAMES]; // false for a borrowed ground-throw frame
+} Animation;
 
-//[NOTE] DEAD CODE START
-static Texture2D gunTex;
-static bool gunOk = false;
-//[NOTE] DEAD CODE END
+static Animation animations[ANIM_COUNT];
+static Texture2D bombTex;
+static bool bombOk = false;
+
 // snap a world coordinate to the art-pixel grid
 static float SnapPx(float v) {
   return floorf(v / (float)ART_PIXEL) * (float)ART_PIXEL;
@@ -107,34 +98,60 @@ static Texture2D LoadPixelTexture(const char *path, bool *ok) {
   return t;
 }
 
+// Load numbered PNGs from the folder specified in animDefs.
+// Missing frames remain empty and are drawn as placeholders.
+static void LoadAnimation(AnimId id) {
+  const AnimDef *def = &animDefs[id];
+  if (def->frameCount < 1 || def->frameCount > MAX_ANIM_FRAMES) {
+    TraceLog(LOG_WARNING, "ART: invalid frame count for animation %d", id);
+    return;
+  }
+
+  for (int i = 0; i < def->frameCount; i++) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%d.png", def->folder, i + 1);
+    bool loaded = false;
+    animations[id].frames[i] = LoadPixelTexture(path, &loaded);
+    animations[id].owned[i] = loaded;
+  }
+}
+
+static bool HasFrame(AnimId id, int frame) {
+  return id >= 0 && id < ANIM_COUNT && frame >= 0 &&
+         frame < animDefs[id].frameCount &&
+         animations[id].frames[frame].id != 0;
+}
+
 void Art_Load(void) {
   TraceLog(LOG_INFO, "ART: working directory = %s", GetWorkingDirectory());
   ghostShader = LoadShader(NULL, "shaders/ghost.fs");
-  for (int i = 0; i < ANIM_COUNT; i++) {
-    animTex[i] = LoadPixelTexture(animDefs[i].file, &animOk[i]);
-    if (animOk[i])
-      TraceLog(LOG_INFO, "ART: loaded %s (%dx%d)", animDefs[i].file,
-               animTex[i].width, animTex[i].height);
+
+  // All animation types use the same loader and folder convention.
+  for (int id = 0; id < ANIM_COUNT; id++)
+    LoadAnimation((AnimId)id);
+
+  // Air-throw art is optional: borrow the corresponding ground frame.
+  for (int i = 0; i < 5; i++) {
+    if (!HasFrame(ANIM_THROW_AIR, i) && HasFrame(ANIM_THROW_GROUND, i)) {
+      animations[ANIM_THROW_AIR].frames[i] =
+          animations[ANIM_THROW_GROUND].frames[i];
+      animations[ANIM_THROW_AIR].owned[i] = false;
+    }
   }
-  //[NOTE] DEAD CODE START
-  gunTex = LoadPixelTexture(GUN_FILE, &gunOk);
-  //[NOTE] DEAD CODE END
+  bombTex = LoadPixelTexture("bomb/bombbluesmall.png", &bombOk);
 }
 
 void Art_Unload(void) {
   if (ghostShader.id != 0)
     UnloadShader(ghostShader);
-
-  for (int i = 0; i < ANIM_COUNT; i++)
-    if (animOk[i])
-      UnloadTexture(animTex[i]);
-  // if (tilesetOk)
-  //   UnloadTexture(tileset);
-
-  //[NOTE] DEAD CODE START
-  if (gunOk)
-    UnloadTexture(gunTex);
-  //[NOTE] DEAD CODE END
+  for (int a = 0; a < ANIM_COUNT; a++) {
+    for (int f = 0; f < animDefs[a].frameCount; f++) {
+      if (animations[a].owned[f])
+        UnloadTexture(animations[a].frames[f]);
+    }
+  }
+  if (bombOk)
+    UnloadTexture(bombTex);
 }
 
 // =====================================================================
@@ -149,34 +166,30 @@ void Art_UpdatePlayerAnim(AnimId id, float dt) {
 }
 
 static int CurrentFrame(void) {
-  const AnimDef *d = &animDefs[curAnim];
-  int f = (int)(animTime * d->fps);
-  if (d->loop)
-    return f % d->frames;
-  return f >= d->frames ? d->frames - 1 : f;
+  const AnimDef *a = &animDefs[curAnim];
+  if (a->frameCount < 1)
+    return 0;
+  int frame = (int)(animTime * a->fps);
+  if (a->loop)
+    return frame % a->frameCount;
+  return frame >= a->frameCount ? a->frameCount - 1 : frame;
 }
 
-// Draw one frame of an animation bottom-centred on `box`, flipped when facing
-// left.
-static void DrawSpriteFrame(int anim, int frame, Rectangle box, float sx,
+// Draw one pre-sliced PNG frame, using the existing full-resolution geometry.
+// Squash/stretch continues to be rounded to physical screen pixels.
+static void DrawSpriteFrame(int animId, int frame, Rectangle box, float sx,
                             float sy, bool facingRight, Color tint) {
-  const AnimDef *d = &animDefs[anim];
-  Texture2D t = animTex[anim];
+  if (animId < 0 || animId >= ANIM_COUNT || !HasFrame((AnimId)animId, frame))
+    return;
+  Texture2D t = animations[animId].frames[frame];
+  float fw = (float)t.width, fh = (float)t.height;
+  Rectangle src = {0, 0, facingRight ? fw : -fw, fh};
 
-  float fw = (float)t.width / d->frames;
-  float fh = (float)t.height;
-  Rectangle src = {frame * fw, 0.0f, facingRight ? fw : -fw, fh};
-
-  float baseW = fw * SPRITE_SCALE, baseH = fh * SPRITE_SCALE; // unsquashed size
+  float baseW = fw * SPRITE_SCALE, baseH = fh * SPRITE_SCALE;
   float dw = baseW * sx, dh = baseH * sy;
   float ox = facingRight ? SPRITE_OFFSET_X : -SPRITE_OFFSET_X;
-
-  // anchor = the UNSQUASHED sprite, snapped to the art grid, so the feet and
-  // centre line never leave the grid (identical to before when sx = sy = 1)
   float ax = SnapPx(box.x + box.width / 2.0f - baseW / 2.0f + ox);
   float ay = SnapPx(box.y + box.height - baseH + SPRITE_OFFSET_Y);
-
-  // the squash grows from the bottom-centre in whole SCREEN pixels, not art px
   float cx = ax + baseW / 2.0f, feet = ay + baseH;
   float x0 = RoundScreen(cx - dw / 2.0f), x1 = RoundScreen(cx + dw / 2.0f);
   float y0 = RoundScreen(feet - dh);
@@ -192,37 +205,24 @@ static void DrawSprite(Rectangle box, float sx, float sy, bool facingRight,
 // =====================================================================
 //  PLAYER
 // =====================================================================
-static void DrawPlaceholder(const ArtPlayer *a) {
-  float w = a->box.width * a->sx;
-  float h = a->box.height * a->sy;
-  Rectangle r = {a->box.x + a->box.width / 2 - w / 2,
-                 a->box.y + a->box.height - h, w, h};
-
-  Color c = (Color){240, 240, 255, 255};
-  if (a->noDash)
-    c = (Color){110, 170, 255, 255};
-  if (a->lowStamina)
-    c = RED;
-
-  DrawRectangleRec(r, c);
-  float ex = a->facingRight ? r.x + r.width * 0.55f : r.x + r.width * 0.10f;
-  DrawRectangleRec((Rectangle){ex, r.y + r.height * 0.18f, r.width * 0.35f,
-                               r.height * 0.16f},
-                   (Color){30, 30, 40, 255});
-  if (a->gliding)
-    DrawRectangleRec((Rectangle){r.x - 8, r.y - 10, r.width + 16, 5}, YELLOW);
-}
 
 void Art_DrawPlayer(const ArtPlayer *a) {
-  if (animOk[curAnim]) {
+  if (HasFrame(curAnim, CurrentFrame())) {
     Color tint = WHITE;
     if (a->noDash && TINT_SPRITE_WHEN_NO_DASH)
       tint = (Color){150, 190, 255, 255};
     if (a->lowStamina)
       tint = (Color){255, 110, 110, 255};
-    DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
-  } else
-    DrawPlaceholder(a);
+    if (a->chargedFlash && ghostShader.id != 0) {
+      BeginShaderMode(ghostShader);
+      DrawSprite(a->box, a->sx, a->sy, a->facingRight, WHITE);
+      EndShaderMode();
+    } else {
+      if (a->chargedFlash)
+        tint = WHITE; // shader missing: benign fallback
+      DrawSprite(a->box, a->sx, a->sy, a->facingRight, tint);
+    }
+  }
 
   if (a->stamina01 < 1.0f) // stamina bar
   {
@@ -230,7 +230,8 @@ void Art_DrawPlayer(const ArtPlayer *a) {
     float bw = 10.0f * ART_PIXEL;
     float bh = (float)ART_PIXEL;
     float bx = SnapPx(a->box.x + a->box.width / 2 - bw / 2);
-    float by = SnapPx(a->box.y - 4.0f * ART_PIXEL - (animOk[curAnim] ? 12 : 0));
+    bool hasSprite = HasFrame(curAnim, CurrentFrame());
+    float by = SnapPx(a->box.y - 4.0f * ART_PIXEL - (hasSprite ? 12 : 0));
     DrawRectangleRec((Rectangle){bx, by, bw, bh}, (Color){40, 40, 50, 255});
     DrawRectangleRec(
         (Rectangle){bx, by, SnapPx(bw * a->stamina01 + ART_PIXEL * 0.5f), bh},
@@ -240,7 +241,7 @@ void Art_DrawPlayer(const ArtPlayer *a) {
 
 ArtFrame Art_CurrentFrame(void) {
   ArtFrame f = {-1, 0};
-  if (animOk[curAnim]) {
+  if (HasFrame(curAnim, CurrentFrame())) {
     f.anim = (int)curAnim;
     f.frame = CurrentFrame();
   }
@@ -251,7 +252,8 @@ ArtFrame Art_CurrentFrame(void) {
 // playerSR.sprite).
 void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
                    Color tint) {
-  if (frame.anim >= 0 && frame.anim < ANIM_COUNT && animOk[frame.anim]) {
+  if (frame.anim >= 0 && frame.anim < ANIM_COUNT &&
+      HasFrame((AnimId)frame.anim, frame.frame)) {
     if (ghostShader.id != 0) {
       BeginShaderMode(ghostShader);
 
@@ -270,31 +272,19 @@ void Art_DrawGhost(Rectangle box, ArtFrame frame, bool facingRight,
 }
 
 // =====================================================================
-//  GUN
-//  Rotated in the LOW-RES pixel target, so the rotation steps are as coarse as
-//  the art pixels (the Unity pixel-perfect-camera look).
+//  THROWN BOMB SPRITE
 // =====================================================================
-//[NOTE] DEAD CODE START
-void Art_DrawGun(Vector2 pivot, Vector2 aim) {
-  float angle = atan2f(aim.y, aim.x) * 57.2957795f; // degrees
-  bool flipY = aim.x < 0.0f; // aiming left: mirror so it isn't upside down
-
-  // pivot position on the pixel grid
-  Vector2 p = {SnapPx(pivot.x), SnapPx(pivot.y + GUN_OFFSET_Y * ART_PIXEL)};
-
-  if (gunOk) {
-    float w = (float)gunTex.width, h = (float)gunTex.height;
-    float py = flipY ? (h - GUN_PIVOT_Y) : GUN_PIVOT_Y;
-    Rectangle src = {0, 0, w, flipY ? -h : h};
-    Rectangle dst = {p.x, p.y, w * ART_PIXEL, h * ART_PIXEL};
-    DrawTexturePro(gunTex, src, dst,
-                   (Vector2){GUN_PIVOT_X * ART_PIXEL, py * ART_PIXEL}, angle,
-                   WHITE);
+// Bomb is drawn in the full-resolution world pass, like the player, so
+// fractional animation/rotation is not quantized by the low-res tile target.
+void Art_DrawBomb(Vector2 center, float angle) {
+  if (bombOk) {
+    float w = bombTex.width * ART_PIXEL, h = bombTex.height * ART_PIXEL;
+    DrawTexturePro(
+        bombTex, (Rectangle){0, 0, (float)bombTex.width, (float)bombTex.height},
+        (Rectangle){center.x, center.y, w, h}, (Vector2){w * 0.5f, h * 0.5f},
+        angle, WHITE);
   } else {
-    float w = GUN_PLACEHOLDER_W * ART_PIXEL, h = GUN_PLACEHOLDER_H * ART_PIXEL;
-    DrawRectanglePro((Rectangle){p.x, p.y, w, h},
-                     (Vector2){GUN_PIVOT_X * ART_PIXEL, h / 2.0f}, angle,
-                     (Color){200, 200, 215, 255});
+    DrawCircleV(center, 12.0f, (Color){40, 40, 45, 255});
+    DrawCircleLines((int)center.x, (int)center.y, 12, WHITE);
   }
 }
-//[NOTE] DEAD CODE END

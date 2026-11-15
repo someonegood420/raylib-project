@@ -236,15 +236,20 @@ void Fx_Event(FxEvent e, Rectangle box, Vector2 dir, bool facingRight) {
     break;
   }
 
-  case FX_GUN: // gunparticle: burst out of the muzzle
-  {
-    Vector2 muzzle = {c.x + dir.x * 30.0f, c.y + dir.y * 30.0f};
-    for (int i = 0; i < 14; i++) {
-      float sp = RandF(FX_U(3.0f), FX_U(10.0f));
-      Vector2 vel = {dir.x * sp + RandF(-FX_U(2.0f), FX_U(2.0f)),
-                     dir.y * sp + RandF(-FX_U(2.0f), FX_U(2.0f))};
-      Emit(muzzle, vel, RandF(0.15f, 0.3f), 7.0f, 1.0f,
-           (Color){255, 225, 120, 255}, (Color){255, 110, 40, 0}, 0.0f);
+  case FX_EXPLOSION: {
+    // Explosions create a ripple and radial particles, not player ghost copies.
+    for (int i = 0; i < MAX_RIPPLES; ++i) {
+      if (!ripples[i].active) {
+        ripples[i] = (Ripple){c, 0.0f, true};
+        break;
+      }
+    }
+    for (int i = 0; i < 28; ++i) {
+      float angle = (6.2831853f * i) / 28.0f;
+      float speed = RandF(FX_U(5.0f), FX_U(13.0f));
+      Vector2 vel = {cosf(angle) * speed, sinf(angle) * speed};
+      Emit(c, vel, RandF(0.18f, 0.4f), 8.0f, 1.0f, (Color){255, 248, 205, 255},
+           (Color){255, 120, 40, 0}, FX_U(1.0f));
     }
     break;
   }
@@ -299,23 +304,6 @@ void Fx_Tick(float dt, const FxPlayerState *p) {
       trail[trailCount++] = (TrailPt){c, 0.0f, !trailWasEmitting};
   }
   trailWasEmitting = p->dashAttacking;
-
-  // ---- dash particles (dashparticle plays during the end phase) ----
-  if (p->dashEnding) {
-    dashEmitAcc += DASH_PARTICLE_RATE * dt;
-    float len = sqrtf(p->vel.x * p->vel.x + p->vel.y * p->vel.y);
-    Vector2 back = len > 1.0f ? (Vector2){-p->vel.x / len, -p->vel.y / len}
-                              : (Vector2){0, 0};
-    while (dashEmitAcc >= 1.0f) {
-      dashEmitAcc -= 1.0f;
-      Vector2 pos = {c.x + RandF(-8.0f, 8.0f), c.y + RandF(-14.0f, 14.0f)};
-      Vector2 vel = {back.x * FX_U(2.0f) + RandF(-FX_U(1.0f), FX_U(1.0f)),
-                     back.y * FX_U(2.0f) + RandF(-FX_U(1.0f), FX_U(1.0f))};
-      Emit(pos, vel, RandF(0.5f, 0.75f), 8.0f, 0.0f,
-           (Color){200, 225, 255, 255}, (Color){120, 170, 255, 0}, 0.0f);
-    }
-  } else
-    dashEmitAcc = 0.0f;
 
   // ---- speed rings ----
   float ax = fabsf(p->vel.x), ay = fabsf(p->vel.y);

@@ -1,18 +1,18 @@
 /*
 Raylib platformer: AABB collision + Celeste-style movement.
 Ported from a Unity PlayerMovement script (run accel, coyote time, jump buffer,
-variable jump height, hang time, double jump, glide, wall slide / grab / jump,
+variable jump height, hang time, double jump, wall slide / grab / jump,
 stamina, 8-way dash with hitstop, super/hyper dash jumps, crouch + crouch
 slide).
 
 Controls
   Move ........ A/D or Left/Right
   Up / Down ... W/S or Up/Down (climb on wall, hyper dash jump)
-  Crouch ...... Left Shift (crouch / crouch slide / fast-fall)
-  Aim gun ..... W/A/S/D (8 directions)   Fire: U or P
+  Bombdive .... Shift midair while K is fully charged
+  Throw bomb ... U/P; WASD/arrow keys aim, K hold/release burst
   Jump ........ J or Z   (hold = higher, press again in air = double jump,
-                              hold after out of jumps = glide)
-  Dash ........ K or X (8 directions)
+                              double jump available in air)
+  Bombburst .... Hold K until white flashing, release + direction
   Wall grab ... hold L or Left Ctrl against a wall
   R ........... respawn      F1 ... debug view (hitboxes / probes)
 */
@@ -51,8 +51,8 @@ Controls
 // ---- Run ----
 // runAccelAmount  = 50 * runAcceleration  / runMaxSpeed = 5   (1/s, rigidbody
 // mass 1) runDeccelAmount = 50 * runDecceleration / runMaxSpeed = 10
-#define RUN_MAX_SPEED U(25) // runMaxSpeed
-#define RUN_ACCEL 5.0f
+#define RUN_MAX_SPEED U(20) // runMaxSpeed
+#define RUN_ACCEL 10.0f
 #define RUN_DECEL 10.0f
 #define ACCEL_IN_AIR 1.0f      // accelInAir
 #define DECEL_IN_AIR 0.201f    // deccelInAir
@@ -86,10 +86,6 @@ Controls
 // !IsJumping). true = you may double-jump while still rising; false = original.
 #define ALLOW_JUMP_WHILE_RISING true
 
-// ---- Glide ----
-#define GLIDE_GRAV_MULT 0.35f  // glideGravityMult
-#define GLIDE_MAX_FALL U(7.5f) // glideMaxFallSpeed
-
 // ---- Wall jump ----
 #define WALL_JUMP_FORCE_X U(17)   // wallJumpForce.x
 #define WALL_JUMP_FORCE_Y U(15)   // wallJumpForce.y
@@ -117,47 +113,30 @@ Controls
 #define GRAB_DRAIN 8.0f       // grabDrainRate  (per second)
 #define CLIMB_DRAIN 15.0f     // climbDrainRate (per second)
 
-// ---- Dash ----
-#define DASH_AMOUNT 1          // dashAmount
-#define DASH_SPEED U(50)       // dashSpeed
-#define DASH_ATTACK_TIME 0.15f // dashAttackTime
-#define DASH_END_TIME 0.1f     // dashEndTime
-#define DASH_END_SPEED_X                                                       \
-  U(25) // dashEndSpeed.x (multiplied per-axis with the dash direction)
-#define DASH_END_SPEED_Y U(15) // dashEndSpeed.y
-#define DASH_END_RUN_LERP 0.0f // dashEndRunLerp
-#define DASH_SLEEP 0.1f        // dashSleepTime (hitstop)
-#define DASH_BUFFER 0.309f     // dashInputBufferTime
-#define DASH_REFILL_TIME 0.09f // dashRefillTime
-// Dash ledge correction (the script's dashCornerCorrection /
-// dashCornerCorrectionfix): dashing head-on into a wall whose top edge is low
-// enough hops you ONTO the ledge.
-#define DASH_CORNER_CORRECTION                                                 \
-  U(-0.2f) // dashCornerCorrection (Unity sign: negative = stricter,
-           // the ledge must be this far below your centre)
-#define DASH_CORNER_CORRECTION_FIX                                             \
-  U(0.155f) // dashCornerCorrectionfix (lift above the ledge top)
-#define DASH_CORNER_SKIN U(0.1f) // skinWidth in the script
+// Explosion-powered abilities (velocity impulses; Raylib has no Rigidbody2D).
+#define BOMB_CHARGE_TIME 0.38f
+#define BOMB_BURST_SPEED_PENALTY                                               \
+  false // false = burst speed is always conserved (old behaviour)
+#define BOMB_BURST_CARRY_WINDOW                                                \
+  0.25f // time after a burst in which a double jump keeps the speed
 
-// ---- Dash jumps (super / hyper) ----
-// horizontal = dashTypeMaxSpeed * dashJumpSpeedMult * preserveDashSpeedMult
-#define SUPER_JUMP_VY U(17)                    // superDashVForce
-#define SUPER_JUMP_SPEED U(30 * 0.91f * 0.96f) // superDashMaxSpeed
-#define HYPER_JUMP_VY U(12)                    // hyperDashVForce
-#define HYPER_JUMP_SPEED U(40 * 0.91f * 0.96f) // hyperDashMaxSpeed
-#define DASH_REFUND_MIN_DELAY 0.05f            // dashRefundMinDelay
-#define DASH_REFUND_AMOUNT 1                   // dashRefundAmount
+#define BOMB_DIVE_SPEED U(35) // one-time downward plunge impulse
+#define BOMB_BURST_RISE_GRAVITY 1
+#define BOMB_BURST_VERTICAL_IMPULSE U(27) // added upward velocity on K release
+#define BOMB_BURST_DIAGONAL_SIDE_IMPULSE U(30) // side velocity
+
+#define BOMB_BURST_DIAGONAL_UP_IMPULSE U(17)
+
+#define BOMB_DIVE_REBOUND_UP U(17)   // upward impulse at ground impact
+#define BOMB_DIVE_REBOUND_SIDE U(15) // optional upward-forward rebound
+#define BOMB_BURST_FX_TIME 0.16f
+#define BOMB_THROW_SPEED U(24)
+#define BOMB_FUSE_TIME 1.1f
+#define BOMB_BLAST_RADIUS U(2.0f)
+#define BOMB_MAX 16
+#define BOMB_THROW_DURATION (5.0f / 12.0f)
 
 // ---- Juice / collision ----
-// ---- Gun knockback (PlayerData "Gun" header) ----
-// These three were NOT in the asset values you sent me - they are guesses. Tune
-// them.
-#define KNOCKBACK_FORCE                                                        \
-  U(25) // knockbackForce (added to your velocity, away from the cursor)
-#define KNOCKBACK_STUN                                                         \
-  0.15f // knockbackStunDuration (run input ignored this long)
-#define KNOCKBACK_FREEZE                                                       \
-  0.06f // knockbackFreezeDuration (freeze-frame on firing)
 
 // Squash & stretch: scale goes 1 -> (X, Y) over TIME seconds, then back over
 // TIME. Defaults are the ones from the Unity script (JumpSqueeze /
@@ -201,7 +180,7 @@ Controls
 #define BIND_DOWN_2 KEY_DOWN
 #define BIND_CROUCH KEY_LEFT_SHIFT // crouch / crouch slide / fast-fall
 
-// gun aim (8 directions)
+// throwable bomb aim (8 directions)
 #define BIND_AIM_LEFT KEY_A
 #define BIND_AIM_RIGHT KEY_D
 #define BIND_AIM_UP KEY_W
@@ -209,8 +188,8 @@ Controls
 
 #define BIND_JUMP_1 KEY_J
 #define BIND_JUMP_2 KEY_Z
-#define BIND_DASH_1 KEY_K
-#define BIND_DASH_2 KEY_X
+#define BIND_BURST_1 KEY_K
+// X no longer activates bombburst; charge and release K only.
 #define BIND_GRAB_1 KEY_L
 #define BIND_GRAB_2 KEY_LEFT_CONTROL
 
@@ -224,8 +203,7 @@ Controls
 #define REF_W 1280 // the view you designed for = 320 x 180 art pixels
 #define REF_H 720
 #define BIND_RELOAD KEY_F5 // reload the LDtk level without restarting the game
-#define BIND_FIRE                                                              \
-  KEY_U // gun: fires along the aim, knocks YOU back the other way
+#define BIND_FIRE KEY_U    // throw bomb
 #define BIND_FIRE_2 KEY_P
 
 // =====================================================================
@@ -246,7 +224,7 @@ static int solidCount = 0;
 #define SOLID_COUNT solidCount
 static Vector2 spawnPos;       // top-left of the player when (re)spawning
 static float killY = 1600.0f;  // fall below this and you respawn
-static float shakeTime = 0.0f; // camera shake timer (set when dashing)
+static float shakeTime = 0.0f; // camera shake timer (explosions)
 
 // =====================================================================
 //  AABB
@@ -264,6 +242,63 @@ static int FirstSolidHit(Rectangle r) {
   return -1;
 }
 
+// Bomb projectiles live in world coordinates (independent of the camera).
+typedef struct {
+  Vector2 pos, vel;
+  float fuse, angle;
+  bool active;
+} Bomb;
+static Bomb bombs[BOMB_MAX];
+static void ExplodeAt(Vector2 pos) {
+  Level_Explode(&level, pos, BOMB_BLAST_RADIUS);
+  // The collision array may be reallocated when merged IntGrid solids split.
+  solids = level.solids;
+  solidCount = level.solidCount;
+  Fx_Event(FX_EXPLOSION, (Rectangle){pos.x - 8, pos.y - 8, 16, 16},
+           (Vector2){0, -1}, true);
+  shakeTime = SHAKE_DURATION;
+}
+static void ThrowBomb(Vector2 pos, Vector2 dir) {
+  for (int i = 0; i < BOMB_MAX; ++i)
+    if (!bombs[i].active) {
+      bombs[i] =
+          (Bomb){pos,
+                 {dir.x * BOMB_THROW_SPEED, dir.y * BOMB_THROW_SPEED - U(5)},
+                 BOMB_FUSE_TIME,
+                 0,
+                 true};
+      break;
+    }
+}
+static void TickBombs(float dt) {
+  for (int i = 0; i < BOMB_MAX; ++i) {
+    Bomb *b = &bombs[i];
+    if (!b->active)
+      continue;
+    b->fuse -= dt;
+    b->vel.y += GRAVITY * dt;
+    Vector2 move = {b->vel.x * dt, b->vel.y * dt};
+    // Sub-step along the projectile path to avoid tunneling through tiles.
+    int steps = (int)ceilf(fmaxf(fabsf(move.x), fabsf(move.y)) / MAX_STEP);
+    if (steps < 1)
+      steps = 1;
+    bool hit = false;
+    for (int k = 0; k < steps; ++k) {
+      b->pos.x += move.x / steps;
+      b->pos.y += move.y / steps;
+      if (FirstSolidHit((Rectangle){b->pos.x - 7, b->pos.y - 7, 14, 14}) >= 0) {
+        hit = true;
+        break;
+      }
+    }
+    b->angle += 360.0f * dt;
+    if (hit || b->fuse <= 0) {
+      Vector2 pos = b->pos;
+      b->active = false;
+      ExplodeAt(pos);
+    }
+  }
+}
 // =====================================================================
 //  PLAYER
 // =====================================================================
@@ -278,17 +313,21 @@ typedef struct {
   // timers
   float time;
   float lastOnGround, lastOnWall, lastOnWallL, lastOnWallR;
-  float lastPressedJump, lastPressedDash, lastJumpPressTime;
+  float lastPressedJump, lastJumpPressTime;
   float wallJumpStart;
-  float dashStartTime, dashTimer, dashEndTimer, dashRefillTimer;
+  float burstFxTimer;
+  float burstWindow; // > 0: burst speed is still protected
+  bool burstDecay; // true: burst speed is no longer protected (until you land)
   float hitstop;
   float convertTimer;
   int convertDir;
 
-  // gun
-  Vector2 aim;          // unit vector from the player toward the cursor
-  bool knockbackQueued; // set by ReadInput when you fire
-  float knockbackTimer; // > 0: run input is ignored (_inKnockback)
+  // throwable bomb aim
+  Vector2 aim; // unit vector from the player toward the cursor
+  bool throwQueued;
+  bool burstHeld, burstReleaseQueued, diveQueued, burstCharging, burstReady;
+  float chargeTime, throwAnimTime, diveAnimTime;
+  bool throwOnGround, bombDiving;
 
   // crouch squash waiting for the crouch animation (DelayedCrouchSqueeze)
   bool csPending, csEntering;
@@ -297,13 +336,13 @@ typedef struct {
   // state
   bool facingRight, grounded;
   bool jumping, jumpCut, jumpFalling;
-  bool wallJumping, wallGrabbing, sliding, gliding;
-  bool dashing, dashAttacking, dashEnding;
+  bool wallJumping, wallGrabbing, sliding;
+  // Burst and rebound do not lock velocity; physics resumes immediately.
+  bool bombBurstActive;
   bool crouching;
   bool crouchHeld; // crouch key (separate from the down input)
-  int jumpsLeft, dashesLeft;
+  int jumpsLeft;
   float stamina;
-  Vector2 dashDir;
 
   // juice: squash & stretch tween
   float sx, sy;
@@ -361,76 +400,11 @@ static void Respawn(Player *p) {
   p->box = (Rectangle){spawnPos.x, spawnPos.y, PLAYER_W, STAND_H};
   p->facingRight = true;
   p->jumpsLeft = AIR_JUMPS + 1;
-  p->dashesLeft = DASH_AMOUNT;
   p->stamina = MAX_STAMINA;
-  p->lastPressedJump = p->lastPressedDash = -1.0f;
+  p->lastPressedJump = -1.0f;
   p->sx = p->sy = 1.0f;
   Fx_Reset();
-}
-
-// ---------------------------------------------------------------------
-// Dash ledge correction - port of the corner-hit branch of StartDash():
-//  1. only for a (nearly) head-on dash into a wall
-//  2. cast a ray DOWN, just inside the wall face, from 1 unit above your head
-//  to
-//     1 unit below your feet to find the ledge's top surface
-//  3. the ledge must be low enough: ledgeTop >= centre - dashCornerCorrection
-//     (y is flipped vs Unity, hence the minus)
-//  4. move you past the wall edge and (dashCornerCorrectionfix) above the ledge
-//  5. only if that spot is free; otherwise the caller stops you at the wall
-// Returns true if the player was moved onto the ledge.
-// ---------------------------------------------------------------------
-static bool TryDashLedgeCorrection(Player *p, const Rectangle *wall,
-                                   float step) {
-  if (fabsf(p->dashDir.x) <= 0.8f) // original: dot(dir, normal) < -0.8
-    return false;
-
-  float dirX = step > 0 ? 1.0f : -1.0f;
-  float faceX = (step > 0) ? wall->x : wall->x + wall->width; // contact point
-  float rayX = faceX + dirX * DASH_CORNER_SKIN;
-  float startY = p->box.y - U(1.0f);               // 1 unit above the head
-  float endY = p->box.y + p->box.height + U(1.0f); // 1 unit below the feet
-
-  // first solid surface the downward ray meets (a ray starting inside a solid
-  // "hits" at its start, which is above the player's centre -> rejected below)
-  float ledgeTop = 0.0f;
-  bool found = false;
-  for (int i = 0; i < SOLID_COUNT; i++) {
-    const Rectangle *s = &solids[i];
-    if (rayX < s->x || rayX > s->x + s->width)
-      continue;
-    float hitY;
-    if (s->y <= startY && startY < s->y + s->height)
-      hitY = startY; // started inside it
-    else if (s->y >= startY && s->y <= endY)
-      hitY = s->y;
-    else
-      continue;
-    if (!found || hitY < ledgeTop) {
-      ledgeTop = hitY;
-      found = true;
-    }
-  }
-  if (!found)
-    return false;
-
-  float centerY = p->box.y + p->box.height / 2.0f;
-  if (ledgeTop < centerY - DASH_CORNER_CORRECTION) // not "half above" the ledge
-    return false;
-
-  float centerX = faceX + dirX * (p->box.width / 2.0f + DASH_CORNER_SKIN);
-  float newCenterY =
-      ledgeTop - p->box.height / 2.0f - DASH_CORNER_CORRECTION_FIX;
-
-  // OverlapBox(newPos, size * 0.99): is the spot free?
-  float w = p->box.width * 0.99f, h = p->box.height * 0.99f;
-  Rectangle check = {centerX - w / 2.0f, newCenterY - h / 2.0f, w, h};
-  if (FirstSolidHit(check) >= 0)
-    return false;
-
-  p->box.x = centerX - p->box.width / 2.0f;
-  p->box.y = newCenterY - p->box.height / 2.0f;
-  return true;
+  memset(bombs, 0, sizeof(bombs));
 }
 
 // ---------------------------------------------------------------------
@@ -438,8 +412,7 @@ static bool TryDashLedgeCorrection(Player *p, const Rectangle *wall,
 // Returns true if something blocked us. Sub-steps keep fast movement
 // (dash) from tunnelling through thin platforms.
 // ---------------------------------------------------------------------
-static bool MoveAxis(Player *p, float amount, bool horizontal,
-                     bool cornerAssist) {
+static bool MoveAxis(Player *p, float amount, bool horizontal) {
   while (amount != 0.0f) {
     float step = Clampf(amount, -MAX_STEP, MAX_STEP);
     amount -= step;
@@ -455,11 +428,6 @@ static bool MoveAxis(Player *p, float amount, bool horizontal,
       p->box = next;
       continue;
     }
-
-    // Dash ledge correction: hop onto a ledge instead of stopping at its wall.
-    if (horizontal && cornerAssist &&
-        TryDashLedgeCorrection(p, &solids[i], step))
-      continue;
 
     // Snap flush against the solid we hit and stop on this axis.
     Rectangle s = solids[i];
@@ -486,6 +454,7 @@ static void DoJump(Player *p) {
   p->jumpCut = false;
   p->jumpFalling = false;
   p->vel.y = -JUMP_FORCE; // for same height
+  p->burstWindow = 0.0f;  // jumped in time: no decay, speed is kept
   if (onGround)           // bunnyhop boost
     p->vel.x += p->in.x * JUMP_SPEED_BOOST;
   Fx_Event(FX_JUMP, p->box, (Vector2){0, 0}, p->facingRight);
@@ -523,106 +492,58 @@ static void DoWallJump(Player *p, int dir, bool climbJump, float cost) {
   }
 }
 
-static void StartDash(Player *p) {
-  p->hitstop = DASH_SLEEP;
+// Equivalent to Rigidbody2D.AddForce(direction * impulse, ForceMode2D.Impulse)
+// for a mass-one body: change velocity ONCE, never overwrite it each tick.
+static void StartBombBurst(Player *p) {
+  p->bombBurstActive = true;
+  p->bombDiving = false; // a charged burst may interrupt a dive
+  p->burstWindow = BOMB_BURST_SPEED_PENALTY ? BOMB_BURST_CARRY_WINDOW : 0.0f;
+  p->burstDecay = false;
+  float side = Signf(p->in.x); // up or up-forward, not an omnidirectional dash
+  if (side != 0.0f)
+    p->facingRight = side > 0.0f;
+  p->jumping = p->jumpFalling = p->jumpCut = p->wallJumping = false;
+  p->wallGrabbing = p->sliding = false;
+  if (p->vel.x < 0 || p->vel.x > 0)
+    p->vel.x = 0.0f;
+  if (p->vel.y < 0 || p->vel.y > 0)
+    p->vel.y = 0.0f;
 
-  Vector2 d = {p->in.x, -p->in.y}; // world y is flipped
-  float len = sqrtf(d.x * d.x + d.y * d.y);
-  if (len < 0.01f)
-    d = (Vector2){p->facingRight ? 1.0f : -1.0f, 0.0f};
-  else
-    d = (Vector2){d.x / len, d.y / len};
-  p->dashDir = d;
-  if (d.x != 0.0f)
-    p->facingRight = d.x > 0.0f;
-
-  p->dashing = true;
-  p->dashAttacking = true;
-  p->dashEnding = false;
-  p->jumping = p->wallJumping = p->jumpCut = p->jumpFalling = false;
-  p->wallGrabbing = false;
-  p->gliding = false;
-  p->dashesLeft--;
-  p->lastOnGround = 0;
-  p->lastPressedDash = 0;
-  p->dashTimer = DASH_ATTACK_TIME;
-  p->dashStartTime = p->time;
-  shakeTime = SHAKE_DURATION; // camera shake
-  Fx_Event(FX_DASH_START, p->box, p->dashDir,
-           p->facingRight); // ghosts + ripple
-}
-
-static void EndDashAttack(Player *p) {
-  p->dashAttacking = false;
-  p->dashEnding = true;
-  p->dashEndTimer = DASH_END_TIME;
-  p->vel.x = p->dashDir.x * DASH_END_SPEED_X; // Vector2 * Vector2 = per-axis
-  p->vel.y = p->dashDir.y * DASH_END_SPEED_Y;
-}
-
-// Jump during the dash while standing on the ground: super (or hyper if holding
-// down)
-static void DoDashJump(Player *p) {
-  bool hyper = p->in.y < 0.0f;
-  float vy = hyper ? HYPER_JUMP_VY : SUPER_JUMP_VY;
-  float vx = hyper ? HYPER_JUMP_SPEED : SUPER_JUMP_SPEED;
-  bool late = p->lastJumpPressTime > p->dashStartTime + DASH_REFUND_MIN_DELAY;
-
-  p->lastPressedJump = 0;
-  p->lastOnGround = 0;
-  if (p->jumpsLeft > 0)
-    p->jumpsLeft--;
-  p->vel.y = -vy;
-  // Direction: held direction wins (so you can dash right, then press left +
-  // jump to dash-jump the OTHER way); with no input, keep the dash direction.
-  float dirX;
-  if (p->in.x != 0.0f)
-    dirX = Signf(p->in.x);
-  else if (p->dashDir.x != 0.0f)
-    dirX = Signf(p->dashDir.x);
-  else
-    dirX = p->facingRight ? 1.0f : -1.0f;
-  p->facingRight = dirX > 0.0f;
-  p->vel.x = dirX * vx;
-  p->dashing = p->dashAttacking = p->dashEnding = false;
-  p->jumping = true;
-  p->jumpCut = false;
-  if (late) // buffered = refund
-    p->dashesLeft = (int)fminf((float)DASH_AMOUNT,
-                               (float)(p->dashesLeft + DASH_REFUND_AMOUNT));
-  Fx_Event(FX_JUMP, p->box, (Vector2){0, 0}, p->facingRight);
+  if (side == 0.0f) {
+    // Straight upward
+    p->vel.y = fminf(p->vel.y, 0.0f) - BOMB_BURST_VERTICAL_IMPULSE;
+  } else {
+    // Upward-forward
+    p->vel.x += side * BOMB_BURST_DIAGONAL_SIDE_IMPULSE;
+    p->vel.y = fminf(p->vel.y, 0.0f) - BOMB_BURST_DIAGONAL_UP_IMPULSE;
+  }
+  p->lastOnGround = 0.0f;
+  p->burstFxTimer = BOMB_BURST_FX_TIME;
+  Vector2 fxDir = {side, -1};
+  Fx_Event(FX_DASH_START, p->box, fxDir, p->facingRight);
+  ExplodeAt(
+      (Vector2){p->box.x + p->box.width * 0.5f, p->box.y + p->box.height});
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
-// Gun knockback (PlayerMovement.ApplyKnockback): fire at the cursor and you are
-// thrown the opposite way. Freeze-frame + a short lockout of run input.
-static void ApplyKnockback(Player *p) {
-  Vector2 kd = {-p->aim.x, -p->aim.y}; // knock back = away from the aim
-  p->hitstop = KNOCKBACK_FREEZE;       // Sleep(knockbackFreezeDuration)
-  Fx_Event(FX_GUN, p->box, p->aim, p->facingRight);
-
-  // interrupt states that would fight the knockback
-  p->wallGrabbing = false;
-  p->sliding = false;
-  if (p->dashing) // StopCoroutine(StartDash)
-    p->dashing = p->dashAttacking = p->dashEnding = false;
-  p->jumpCut = p->jumping = p->jumpFalling = false; // no gravity leak
-
-  // remove velocity that opposes the knockback, per axis
-  if ((kd.x > 0 && p->vel.x < 0) || (kd.x < 0 && p->vel.x > 0))
-    p->vel.x = 0.0f;
-  if ((kd.y > 0 && p->vel.y < 0) || (kd.y < 0 && p->vel.y > 0))
-    p->vel.y = 0.0f;
-
-  p->vel.x += kd.x * KNOCKBACK_FORCE; // AddForce(..., Impulse)
-  p->vel.y += kd.y * KNOCKBACK_FORCE;
-
-  p->knockbackTimer = KNOCKBACK_STUN; // _inKnockback
+static void ReboundFromBombDive(Player *p) {
+  // Impact causes the explosion; this impulse launches upward or up-forward.
+  Vector2 impact = {p->box.x + p->box.width * 0.5f, p->box.y + p->box.height};
+  ExplodeAt(impact);
+  float side = Signf(p->in.x);
+  if (side != 0.0f)
+    p->facingRight = side > 0.0f;
+  p->vel.x += side * BOMB_DIVE_REBOUND_SIDE;
+  p->vel.y = -BOMB_DIVE_REBOUND_UP;
+  p->bombDiving = false;
+  p->jumping = p->jumpFalling = p->jumpCut = false;
+  p->lastOnGround = 0.0f;
+  p->burstFxTimer = BOMB_BURST_FX_TIME;
+  Fx_Event(FX_DASH_START, p->box, (Vector2){side, -1}, p->facingRight);
+  Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
 static void Run(Player *p, float lerpAmount, float dt) {
-  if (p->knockbackTimer > 0.0f)
-    return; // _inKnockback: skip run input during the stun
   float target = p->in.x * (p->crouching ? CROUCH_WALK_SPEED : RUN_MAX_SPEED);
   target = p->vel.x + (target - p->vel.x) * lerpAmount;
 
@@ -644,8 +565,8 @@ static void Run(Player *p, float lerpAmount, float dt) {
 
   // conserve momentum: don't brake in the air if already faster than max in our
   // direction
-  if (CONSERVE_MOMENTUM && fabsf(p->vel.x) > fabsf(target) &&
-      Signf(p->vel.x) == Signf(target) && hasTarget && p->lastOnGround < 0)
+  if (CONSERVE_MOMENTUM && !p->burstDecay && fabsf(p->vel.x) > fabsf(target) &&
+      Signf(p->vel.x) == Signf(target) && hasTarget && p->lastOnGround <= 0)
     rate = 0.0f;
 
   p->vel.x += (target - p->vel.x) * fminf(1.0f, rate * dt);
@@ -661,13 +582,25 @@ static void UpdatePlayer(Player *p, float dt) {
   p->lastOnWallL -= dt;
   p->lastOnWallR -= dt;
   p->lastPressedJump -= dt;
-  p->lastPressedDash -= dt;
-  p->knockbackTimer -= dt;
 
-  // ---------- gun knockback (queued by ReadInput) ----------
-  if (p->knockbackQueued) {
-    p->knockbackQueued = false;
-    ApplyKnockback(p);
+  if (p->throwAnimTime > 0)
+    p->throwAnimTime -= dt;
+  if (p->bombDiving)
+    p->diveAnimTime += dt;
+  if (p->burstFxTimer > 0)
+    p->burstFxTimer = fmaxf(0.0f, p->burstFxTimer - dt);
+  if (p->burstWindow > 0.0f && (p->burstWindow -= dt) <= 0.0f)
+    p->burstDecay = true; // window ran out without a jump
+
+  // Throw is not knockback: it creates a physical, timed bomb projectile.
+  if (p->throwQueued) {
+    p->throwQueued = false;
+    p->throwOnGround = p->grounded || p->lastOnGround > 0;
+    p->throwAnimTime = BOMB_THROW_DURATION;
+    Vector2 dir = p->aim;
+    ThrowBomb((Vector2){p->box.x + p->box.width * 0.5f + dir.x * 24,
+                        p->box.y + p->box.height * 0.5f + dir.y * 16},
+              dir);
   }
 
   // ---------- facing ----------
@@ -682,7 +615,7 @@ static void UpdatePlayer(Player *p, float dt) {
                   p->box.height - 12};
   p->grounded = FirstSolidHit(gp) >= 0;
 
-  bool checks = (!p->dashing || p->dashAttacking) && !p->jumping;
+  bool checks = !p->jumping && !p->bombDiving;
   if (checks) {
     if (p->grounded) {
       if (p->lastOnGround < -0.1f)
@@ -690,6 +623,10 @@ static void UpdatePlayer(Player *p, float dt) {
       p->lastOnGround = COYOTE_TIME;
       p->stamina = MAX_STAMINA;
       p->jumpsLeft = AIR_JUMPS + 1;
+      if (!p->bombBurstActive) { // not still rising from the burst
+        p->burstDecay = false;
+        p->burstWindow = 0.0f;
+      }
     }
     if (!p->wallJumping) {
       if (FirstSolidHit(rp) >= 0)
@@ -703,36 +640,40 @@ static void UpdatePlayer(Player *p, float dt) {
                                 // out of stamina)
   }
 
-  // ---------- dash refill (on the ground) ----------
-  if (!p->dashing && p->dashesLeft < DASH_AMOUNT && p->lastOnGround > 0) {
-    p->dashRefillTimer += dt;
-    if (p->dashRefillTimer >= DASH_REFILL_TIME) {
-      p->dashesLeft++;
-      p->dashRefillTimer = 0;
-    }
-  } else
-    p->dashRefillTimer = 0;
-
-  // ---------- dash ----------
-  if (p->lastPressedDash > 0 && p->dashesLeft > 0 && !p->dashing)
-    StartDash(p);
-
-  if (p->dashAttacking) {
-    if (p->grounded && p->lastPressedJump > 0 &&
-        p->lastJumpPressTime >= p->dashStartTime)
-      DoDashJump(p);
-    else {
-      p->dashTimer -= dt;
-      if (p->dashTimer <= 0.0f)
-        EndDashAttack(p);
-    }
-  } else if (p->dashEnding) {
-    p->dashEndTimer -= dt;
-    if (p->dashEndTimer <= 0.0f) {
-      p->dashEnding = false;
-      p->dashing = false;
+  // ---------- charged bombburst / bombdive ----------
+  // Charge anywhere, including midair and after prior bursts.
+  // Releasing K only requires a completed charge.
+  if (p->burstHeld) {
+    p->burstCharging = true;
+    p->chargeTime = fminf(BOMB_CHARGE_TIME, p->chargeTime + dt);
+    p->burstReady = p->chargeTime >= BOMB_CHARGE_TIME;
+  }
+  if (p->diveQueued) {
+    p->diveQueued = false;
+    if (p->burstReady && !p->grounded && !p->bombDiving) {
+      p->bombDiving = true;
+      p->diveAnimTime = 0;
+      p->burstReady = p->burstCharging = false;
+      p->chargeTime = 0;
+      p->wallGrabbing = p->sliding = false;
+      p->jumping = p->wallJumping = false;
+      p->jumpCut = p->jumpFalling = false;
+      p->vel.x *= 0.5f;      // initial plunge retains some prior momentum
+      p->burstWindow = 0.0f; // <-- new
+      p->burstDecay = false; // <-- new
+      p->vel.y = fmaxf(p->vel.y, 0.0f) + BOMB_DIVE_SPEED;
+      shakeTime = SHAKE_DURATION;
     }
   }
+  if (p->burstReleaseQueued) {
+    p->burstReleaseQueued = false;
+    if (p->burstReady)
+      StartBombBurst(p);
+    p->burstCharging = p->burstReady = false;
+    p->chargeTime = 0;
+  }
+  if (!p->burstHeld && !p->burstCharging && !p->burstReady)
+    p->chargeTime = 0;
 
   // ---------- jump state flags ----------
   if (p->jumping && p->vel.y > 0) {
@@ -772,7 +713,7 @@ static void UpdatePlayer(Player *p, float dt) {
   }
 
   // ---------- wall jump / jump ----------
-  if (!p->dashing && p->lastPressedJump > 0) {
+  if (!p->bombDiving && p->lastPressedJump > 0) {
     int dir = (p->lastOnWallR > 0) ? -1 : 1; // direction AWAY from the wall
     bool inputToward = p->in.x != 0.0f && (int)Signf(p->in.x) == -dir;
     bool climbJump = p->wallGrabbing && p->in.y > 0.0f && inputToward;
@@ -780,24 +721,12 @@ static void UpdatePlayer(Player *p, float dt) {
 
     if (p->lastOnWall > 0 && p->lastOnGround <= 0) // works even with no stamina
       DoWallJump(p, dir, climbJump, cost);
-    else if (p->jumpsLeft > 0 && !p->gliding &&
-             (ALLOW_JUMP_WHILE_RISING || !p->jumping))
+    else if (p->jumpsLeft > 0 && (ALLOW_JUMP_WHILE_RISING || !p->jumping))
       DoJump(p);
   }
 
-  // ---------- glide ----------
-  if (!p->dashing && !p->wallGrabbing && !p->wallJumping &&
-      p->lastPressedJump > 0 && p->lastOnGround <= 0 && p->jumpsLeft <= 0 &&
-      p->vel.y > 0 && !p->gliding) {
-    p->gliding = true;
-    p->lastPressedJump = 0;
-  }
-  if (p->gliding &&
-      (!p->jumpHeld || p->lastOnGround > 0 || p->dashing || p->wallGrabbing))
-    p->gliding = false;
-
   // ---------- wall grab ----------
-  bool canGrab = p->lastOnWall > 0 && !p->dashing && !p->jumping &&
+  bool canGrab = p->lastOnWall > 0 && !p->bombDiving && !p->jumping &&
                  !p->wallJumping && p->lastOnGround <= 0 && p->stamina > 0.0f;
   p->wallGrabbing = p->grabHeld && canGrab;
   if (p->wallGrabbing) {
@@ -814,7 +743,7 @@ static void UpdatePlayer(Player *p, float dt) {
                        p->box.width, STAND_H};
     canStand = FirstSolidHit(stand) < 0;
   }
-  bool wantCrouch = p->lastOnGround > 0 && !p->dashing && !p->wallGrabbing &&
+  bool wantCrouch = p->lastOnGround > 0 && !p->bombDiving && !p->wallGrabbing &&
                     (p->crouchHeld || !canStand);
   if (wantCrouch && !p->crouching) {
     float ax = fabsf(p->vel.x);
@@ -833,32 +762,29 @@ static void UpdatePlayer(Player *p, float dt) {
 
   // ---------- wall slide ----------
   bool canSlide = p->lastOnWall > 0 && !p->jumping && !p->wallJumping &&
-                  !p->dashing && p->lastOnGround <= 0;
+                  !p->bombDiving && p->lastOnGround <= 0;
   p->sliding = canSlide && !p->grabHeld &&
                ((p->lastOnWallL > 0 && p->in.x < 0) ||
                 (p->lastOnWallR > 0 && p->in.x > 0));
 
   // ---------- velocity ----------
   float maxFall = MAX_FALL_SPEED;
-
-  if (p->dashAttacking) {
-    p->vel.x = p->dashDir.x * DASH_SPEED; // no gravity during the dash
-    p->vel.y = p->dashDir.y * DASH_SPEED;
+  if (p->bombDiving) {
+    // One downward impulse was applied when dive began. Gravity is active.
+    p->vel.y += GRAVITY * FALL_GRAV_MULT * dt;
   } else if (p->wallGrabbing) {
     p->vel.x = 0.0f;
     p->vel.y =
         p->in.y > 0 ? -CLIMB_UP_SPEED : (p->in.y < 0 ? CLIMB_DOWN_SPEED : 0.0f);
   } else {
-    if (!p->dashing)
-      Run(p, p->wallJumping ? WALL_JUMP_RUN_LERP : 1.0f, dt);
-    else if (p->dashEnding)
-      Run(p, DASH_END_RUN_LERP, dt);
+    Run(p, p->wallJumping ? WALL_JUMP_RUN_LERP : 1.0f, dt);
 
     // pick the gravity multiplier (same priority order as the Unity script)
     float g = 1.0f;
-    if (p->gliding) {
-      g = GLIDE_GRAV_MULT;
-      maxFall = GLIDE_MAX_FALL;
+    if (p->bombBurstActive && p->vel.y < 0.0f) {
+      g = BOMB_BURST_RISE_GRAVITY;
+    } else if (p->bombBurstActive && p->vel.y >= 0.0f) {
+      p->bombBurstActive = false;
     } else if (p->sliding && fabsf(p->vel.y) > MIN_SPEED_ZERO_GRAV) {
       g = 0.0f;
     } // fast on wall: slide force takes over
@@ -905,17 +831,15 @@ static void UpdatePlayer(Player *p, float dt) {
   }
 
   // ---------- move + collide (X then Y) ----------
-  bool hitX = MoveAxis(p, p->vel.x * dt, true, p->dashAttacking);
-  bool hitY = MoveAxis(p, p->vel.y * dt, false, false);
+  bool hitX = MoveAxis(p, p->vel.x * dt, true);
+  bool hitY = MoveAxis(p, p->vel.y * dt, false);
   if (hitX)
     p->vel.x = 0.0f;
   if (hitY)
     p->vel.y = 0.0f;
-
-  // a head-on dash into a wall / floor / ceiling ends the attack phase early
-  if (p->dashAttacking && ((hitX && fabsf(p->dashDir.x) > 0.9f) ||
-                           (hitY && fabsf(p->dashDir.y) > 0.9f)))
-    EndDashAttack(p);
+  if (p->bombDiving && hitY) {
+    ReboundFromBombDive(p);
+  }
 
   // ---------- crouch squash (waits for the crouch animation) ----------
   if (p->csPending) {
@@ -943,9 +867,10 @@ static void UpdatePlayer(Player *p, float dt) {
   }
 
   // ---------- visual effects ----------
-  FxPlayerState fxs = {p->box, p->vel, p->facingRight, p->dashAttacking,
-                       p->dashEnding};
+  FxPlayerState fxs = {p->box, p->vel, p->facingRight, p->burstFxTimer > 0.0f,
+                       false};
   Fx_Tick(dt, &fxs);
+  TickBombs(dt);
 
   // fell out of the world
   if (p->box.y > killY)
@@ -983,11 +908,16 @@ static void ReadInput(Player *p) {
     if ((p->jumping || p->wallJumping) && p->vel.y < 0)
       p->jumpCut = true;
 
-  if (IsKeyPressed(BIND_DASH_1) || IsKeyPressed(BIND_DASH_2))
-    p->lastPressedDash = DASH_BUFFER;
+  bool held = IsKeyDown(BIND_BURST_1);
+  if (!held && p->burstHeld) {
+    p->burstReleaseQueued = true;
+  }
+  p->burstHeld = held;
+  // Shift while charged and airborne triggers impact dive + explosion rebound.
+  if (IsKeyPressed(BIND_CROUCH))
+    p->diveQueued = true;
 
-  // gun: aim with W/A/S/D (8 directions, keeps the last direction when
-  // released); firing queues a knockback the other way
+  // bomb aim uses WASD (8 directions); retain last direction when released
   Vector2 a = {0.0f, 0.0f};
   if (IsKeyDown(BIND_AIM_LEFT))
     a.x -= 1.0f;
@@ -1004,7 +934,7 @@ static void ReadInput(Player *p) {
     p->aim = (Vector2){p->facingRight ? 1.0f : -1.0f, 0.0f};
   }
   if (IsKeyPressed(BIND_FIRE) || IsKeyPressed(BIND_FIRE_2))
-    p->knockbackQueued = true;
+    p->throwQueued = true;
 }
 
 // =====================================================================
@@ -1012,19 +942,19 @@ static void ReadInput(Player *p) {
 // =====================================================================
 // Pick which animation to show. Order = priority (first match wins).
 static AnimId ChooseAnim(const Player *p) {
-  if (p->dashing)
-    return ANIM_DASH;
+  // Each enum identifies a complete animation; art.c advances its PNG frames.
+  if (p->bombDiving)
+    return ANIM_BOMB_DIVE;
+  if (p->throwAnimTime > 0)
+    return p->throwOnGround ? ANIM_THROW_GROUND : ANIM_THROW_AIR;
   if (p->wallGrabbing)
     return p->in.y != 0.0f ? ANIM_WALL_CLIMB : ANIM_WALL_GRAB;
   if (p->sliding)
     return ANIM_WALL_SLIDE;
   if (p->crouching)
     return ANIM_CROUCH;
-  if (!p->grounded) {
-    if (p->gliding)
-      return ANIM_GLIDE;
+  if (!p->grounded)
     return p->vel.y < 0.0f ? ANIM_JUMP : ANIM_FALL;
-  }
   if (fabsf(p->vel.x) > 20.0f)
     return ANIM_RUN;
   return ANIM_IDLE;
@@ -1036,10 +966,10 @@ static ArtPlayer MakeArtPlayer(const Player *p) {
   a.sx = p->sx;
   a.sy = p->sy;
   a.facingRight = p->facingRight;
-  a.noDash = p->dashesLeft <= 0;
+  a.chargedFlash = p->burstReady && sinf(p->time * 34.0f) > -0.1f;
+  a.noDash = false; // burst availability depends only on charge
   a.lowStamina = p->stamina <= 0.0f ||
                  (p->stamina < LOW_STAMINA && sinf(p->time * 40.0f) > 0.0f);
-  a.gliding = p->gliding;
   a.stamina01 = p->stamina / MAX_STAMINA;
   return a;
 }
@@ -1166,9 +1096,9 @@ static void SetBorderless(bool on) {
 static void DrawPlayerLayer(const Player *pl) {
   ArtPlayer ap = MakeArtPlayer(pl);
   Art_DrawPlayer(&ap);
-  Art_DrawGun(
-      (Vector2){pl->box.x + pl->box.width / 2, pl->box.y + pl->box.height / 2},
-      pl->aim);
+  for (int i = 0; i < BOMB_MAX; ++i)
+    if (bombs[i].active)
+      Art_DrawBomb(bombs[i].pos, bombs[i].angle);
 }
 static void DrawPixelLayerContents(Camera2D cam, int w, int h, Rectangle view) {
   // --- tiles layer ---
@@ -1181,7 +1111,7 @@ static void DrawPixelLayerContents(Camera2D cam, int w, int h, Rectangle view) {
 
 static void DrawUILayer(const Player *p, int winH) {
   // DrawText("Move/Aim: WASD  |  Fire: U/P  |  Jump: J/Z "
-  //          "(hold = higher, again = double, hold in air = glide)",
+  //          "(hold = higher, again = double jump)",
   //          10, 8, 16, RAYWHITE);
   //
   // DrawText(
@@ -1190,12 +1120,11 @@ static void DrawUILayer(const Player *p, int winH) {
   //     "slide  |  R: respawn  |  F1: debug  |  F2: pixel mode  |  F5: reload",
   //     10, 28, 16, RAYWHITE);
   //
-  // DrawText(TextFormat("jumps:%d  dashes:%d  stamina:%.0f", p->jumpsLeft,
-  //                     p->dashesLeft, p->stamina),
-  //          10, 52, 16, YELLOW);
+  // DrawText(TextFormat("jumps:%d  stamina:%.0f", p->jumpsLeft, p->stamina),
+  // 10,
+  //          52, 16, YELLOW);
   //
   // DrawText(TextFormat("speed:%.2f", fabsf(p->vel.x)), 10, 72, 16, YELLOW);
-  //
   //
   // DrawFPS(10, winH - 24);
 }
@@ -1298,7 +1227,7 @@ int main(void) {
     while (acc >= PHYSICS_DT) {
       prev = (Vector2){player.box.x, player.box.y}; // <-- new
       if (player.hitstop > 0.0f)
-        player.hitstop -= PHYSICS_DT; // dash freeze-frame
+        player.hitstop -= PHYSICS_DT; // hitstop freeze-frame
       else
         UpdatePlayer(&player, PHYSICS_DT);
       acc -= PHYSICS_DT;
@@ -1339,8 +1268,8 @@ int main(void) {
     Art_SetZoom(zoom);                        // see step 3
     cam.offset = (Vector2){floorf(winW / 2.0f), floorf(winH / 2.0f)};
 
-    // Full-resolution camera: whole world pixels (+ dash shake). Used by the
-    // non-pixel layer, the ripple and the debug overlay.
+    // Full-resolution camera: whole world pixels (+ explosion shake). Used by
+    // the non-pixel layer, the ripple and the debug overlay.
     Camera2D fullCam = cam;
     fullCam.target = (Vector2){roundf(cam.target.x), roundf(cam.target.y)};
     if (shakeTime > 0.0f) { // dash camera shake (whole pixels, fades out)
@@ -1484,12 +1413,11 @@ int main(void) {
     // ------------------------------------------------------------
     if (debug) {
       BeginMode2D(fullCam);
-      // DrawDebug(&player);
-      // Vector2 pc = {player.box.x + player.box.width / 2,
-      //               player.box.y + player.box.height / 2};
-      // DrawCircleV((Vector2){pc.x + player.aim.x * 56, pc.y + player.aim.y *
-      // 56},
-      //             3.0f, (Color){255, 220, 120, 200}); // aim marker
+      DrawDebug(&player);
+      Vector2 pc = {player.box.x + player.box.width / 2,
+                    player.box.y + player.box.height / 2};
+      DrawCircleV((Vector2){pc.x + player.aim.x * 56, pc.y + player.aim.y * 56},
+                  3.0f, (Color){255, 220, 120, 200}); // aim marker
       EndMode2D();
     }
 
