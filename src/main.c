@@ -27,6 +27,50 @@ Controls
 #include <stdio.h>
 #include <string.h>
 
+// Optional WAV sounds. Keep filenames here in sync with resources/audio/.
+// Missing files are skipped, so jump.wav can be the only sound initially.
+typedef enum {
+  SFX_JUMP,
+  SFX_WALL_JUMP,
+  SFX_THROW,
+  SFX_EXPLOSION,
+  SFX_BURST,
+  SFX_DEATH,
+  SFX_SELECT,
+  SFX_PAUSE,
+  SFX_COUNT
+} SfxId;
+static const char *sfxFiles[SFX_COUNT] = {"jump.wav",      "walljump.wav", "throw.wav",
+                                          "explosion.wav", "burst.wav",    "death.wav",
+                                          "select.wav",    "pause.wav"};
+static Sound sfx[SFX_COUNT];
+static bool sfxLoaded[SFX_COUNT];
+
+static void Audio_Load(void) {
+  InitAudioDevice();
+  if (!IsAudioDeviceReady())
+    return;
+  for (int i = 0; i < SFX_COUNT; i++) {
+    char path[128];
+    snprintf(path, sizeof path, "audio/%s", sfxFiles[i]);
+    if (FileExists(path)) {
+      sfx[i] = LoadSound(path);
+      sfxLoaded[i] = sfx[i].frameCount > 0;
+    }
+  }
+}
+static void Audio_Play(SfxId id) {
+  if (sfxLoaded[id])
+    PlaySound(sfx[id]);
+}
+static void Audio_Unload(void) {
+  for (int i = 0; i < SFX_COUNT; i++)
+    if (sfxLoaded[i])
+      UnloadSound(sfx[i]);
+  if (IsAudioDeviceReady())
+    CloseAudioDevice();
+}
+
 // =====================================================================
 //  TUNING  -- values copied from the Unity PlayerData asset
 //  Unity units -> pixels:  1 unit = PPU pixels. 8 px art tile = 1 unit, drawn
@@ -122,7 +166,8 @@ Controls
 #define BOMB_BURST_DIAGONAL_SIDE_IMPULSE U(30) // side velocity
 
 #define BOMB_BURST_DIAGONAL_UP_IMPULSE U(17)
-
+#define BOMB_BURST_MAX_SPEED U(45) // side velocty
+#define BOMB_BURST_MIN_CARRY_SPEED U(25)
 #define BOMB_DIVE_REBOUND_UP U(17)   // upward impulse at ground impact
 #define BOMB_DIVE_REBOUND_SIDE U(15) // optional upward-forward rebound
 #define BOMB_BURST_FX_TIME 0.16f
@@ -250,6 +295,7 @@ typedef struct {
 } Bomb;
 static Bomb bombs[BOMB_MAX];
 static void ExplodeAt(Vector2 pos) {
+  Audio_Play(SFX_EXPLOSION);
   Level_Explode(&level, pos, BOMB_BLAST_RADIUS);
   Fx_Event(FX_EXPLOSION, (Rectangle){pos.x - 8, pos.y - 8, 16, 16}, (Vector2){0, -1});
   shakeTime = SHAKE_DURATION;
@@ -257,6 +303,7 @@ static void ExplodeAt(Vector2 pos) {
 static void ThrowBomb(Vector2 pos, Vector2 dir) {
   for (int i = 0; i < BOMB_MAX; ++i)
     if (!bombs[i].active) {
+      Audio_Play(SFX_THROW);
       bombs[i] = (Bomb){pos,
                         {dir.x * BOMB_THROW_SPEED, dir.y * BOMB_THROW_SPEED - U(5)},
                         BOMB_FUSE_TIME,
@@ -456,6 +503,7 @@ static void Jump(Player *p) {
   if (onGround)           // bunnyhop boost
     p->vel.x += p->in.x * JUMP_SPEED_BOOST;
   Fx_Event(FX_JUMP, p->box, (Vector2){0, 0});
+  Audio_Play(SFX_JUMP);
   Squash(p, JUMP_SQUASH_X, JUMP_SQUASH_Y, JUMP_SQUASH_TIME);
 }
 
@@ -486,12 +534,14 @@ static void WallJump(Player *p, int dir, bool climbJump, float cost) {
       p->turnLockDir = -dir; // the direction back toward the wall
     }
     Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)dir, 0});
+    Audio_Play(SFX_WALL_JUMP);
   }
 }
 
 // Equivalent to Rigidbody2D.AddForce(direction * impulse, ForceMode2D.Impulse)
 // for a mass-one body: change velocity ONCE, never overwrite it each tick.
 static void StartBombBurst(Player *p) {
+  Audio_Play(SFX_BURST);
   p->bombBurstActive = true;
   p->bombDiving = false; // a charged burst may interrupt a dive
   p->burstWindow = BOMB_BURST_SPEED_PENALTY ? BOMB_BURST_CARRY_WINDOW : 0.0f;
@@ -501,19 +551,23 @@ static void StartBombBurst(Player *p) {
     p->facingRight = side > 0.0f;
   p->jumping = p->jumpFalling = p->jumpCut = p->wallJumping = false;
   p->wallGrabbing = p->sliding = false;
-  if (p->vel.x < 0 || p->vel.x > 0)
+  // Chaining: keep existing velocity and ADD the impulse instead of resetting it.
+  // Only speed that works against the burst is dropped.
+  if (side != 0.0f && (Signf(p->vel.x) != side || fabsf(p->vel.x) < BOMB_BURST_MIN_CARRY_SPEED)) {
     p->vel.x = 0.0f;
-  if (p->vel.y < 0 || p->vel.y > 0)
-    p->vel.y = 0.0f;
+  }
+  p->vel.y = fminf(p->vel.y, 0.0f); // falling speed is cancelled, rising speed is kept
 
   if (side == 0.0f) {
-    // Straight upward
-    p->vel.y = fminf(p->vel.y, 0.0f) - BOMB_BURST_VERTICAL_IMPULSE;
+    p->vel.x = 0.0f;                         // reset x velocity
+    p->vel.y -= BOMB_BURST_VERTICAL_IMPULSE; // straight up
   } else {
-    // Upward-forward
-    p->vel.x += side * BOMB_BURST_DIAGONAL_SIDE_IMPULSE;
-    p->vel.y = fminf(p->vel.y, 0.0f) - BOMB_BURST_DIAGONAL_UP_IMPULSE;
+
+    p->vel.x += side * BOMB_BURST_DIAGONAL_SIDE_IMPULSE; // up-forward
+    p->vel.y -= BOMB_BURST_DIAGONAL_UP_IMPULSE;
   }
+  p->vel.x = Clampf(p->vel.x, -BOMB_BURST_MAX_SPEED, BOMB_BURST_MAX_SPEED);
+  p->vel.y = fmaxf(p->vel.y, -BOMB_BURST_MAX_SPEED);
   p->lastOnGround = 0.0f;
   p->burstFxTimer = BOMB_BURST_FX_TIME;
   Vector2 fxDir = {side, -1};
@@ -572,6 +626,7 @@ static void Run(Player *p, float lerpAmount, float dt) {
 // =====================================================================
 static void UpdatePlayer(Player *p, float dt) {
   if (Level_TouchesDestructible(&level, p->box)) {
+    Audio_Play(SFX_DEATH);
     Respawn(p);
     return;
   }
@@ -713,6 +768,7 @@ static void UpdatePlayer(Player *p, float dt) {
         p->turnLockDir = -p->convertDir;
       }
       Fx_Event(FX_WALL_JUMP, p->box, (Vector2){(float)p->convertDir, 0});
+      Audio_Play(SFX_WALL_JUMP);
       p->convertTimer = 0.0f;
     }
   }
@@ -833,11 +889,13 @@ static void UpdatePlayer(Player *p, float dt) {
   // ---------- move + collide (X then Y) ----------
   bool hitX = MoveAxis(p, p->vel.x * dt, true);
   if (Level_TouchesDestructible(&level, p->box)) {
+    Audio_Play(SFX_DEATH);
     Respawn(p);
     return;
   }
   bool hitY = MoveAxis(p, p->vel.y * dt, false);
   if (Level_TouchesDestructible(&level, p->box)) {
+    Audio_Play(SFX_DEATH);
     Respawn(p);
     return;
   }
@@ -880,8 +938,10 @@ static void UpdatePlayer(Player *p, float dt) {
   TickBombs(dt);
 
   // fell out of the world
-  if (p->box.y > killY)
+  if (p->box.y > killY) {
+    Audio_Play(SFX_DEATH);
     Respawn(p);
+  }
 
   p->time += dt;
 }
@@ -1109,7 +1169,7 @@ static void DrawUILayer(const Player *p, int winH) {
   // 10,
   //          52, 16, YELLOW);
   //
-  // DrawText(TextFormat("speed:%.2f", fabsf(p->vel.x)), 10, 72, 16, YELLOW);
+  DrawText(TextFormat("speed:%.2f", fabsf(p->vel.x)), 10, 72, 16, YELLOW);
   //
   // DrawFPS(10, winH - 24);
 }
@@ -1123,7 +1183,10 @@ static bool MenuButton(const char *text, int y) {
   DrawRectangleRec(r, hover ? (Color){30, 30, 30, 255} : (Color){20, 20, 20, 255});
   DrawRectangleLinesEx(r, 2, hover ? WHITE : GRAY);
   DrawText(text, w / 2 - MeasureText(text, 20) / 2, y + 12, 20, WHITE);
-  return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+  bool clicked = hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+  if (clicked)
+    Audio_Play(SFX_SELECT);
+  return clicked;
 }
 
 // Return clicked button index (1-based), or 0 if nothing was clicked.
@@ -1150,7 +1213,8 @@ int main(void) {
   int SCREEN_W = GetScreenWidth();
   int SCREEN_H = GetScreenHeight();
 
-  SearchAndSetResourceDir("resources"); // so "player/idle.png" etc. are found
+  SearchAndSetResourceDir("resources"); // file paths below are relative to resources/
+  Audio_Load();
   Art_Load();
   Fx_Load();
   // Render the whole game scene to a texture before applying refraction.
@@ -1219,6 +1283,7 @@ int main(void) {
     float frameDt = fminf(GetFrameTime(), 0.05f);
     // Esc pauses gameplay; Esc from a menu goes back or resumes.
     if (IsKeyPressed(KEY_ESCAPE)) {
+      Audio_Play(SFX_PAUSE);
       if (menu == MENU_PLAY)
         menu = MENU_PAUSE;
       else if (menu == MENU_PAUSE)
@@ -1523,6 +1588,7 @@ int main(void) {
     UnloadRenderTexture(pixelTarget);
   Fx_Unload();
   Art_Unload();
+  Audio_Unload();
   CloseWindow();
   return 0;
 }
