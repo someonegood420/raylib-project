@@ -1,526 +1,375 @@
 /*
-level.c - LDtk loader. See level.h for what it reads.
-Uses jsmn (jsmn.h, MIT license) to tokenize the .ldtk file.
-*/
-
-#include "art.h"
-#include "jsmn.h"
+ * level.c - ASCII level reader and automatic ground artwork.
+ *
+ * Read the top-level functions first: Level_Load, Level_Draw,
+ * Level_CollectCrystals, Level_Unload. The helpers above them handle
+ * text files, grid collisions, and choosing ground PNG variants.
+ *
+ * No JSON or jsmn in the running game. The separate ldtk2txt program
+ * exports maps containing: # solid, . empty, P spawn, * frost crystal.
+ */
 #include "level.h"
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
-#define SCALE ((float)ART_TILE_SCALE)
+#define MAX_GRID 2048
+#define MAX_VARIANTS 8
+#define ART_SCALE 4
 
-// ---------------------------------------------------------------------
-//  tiny JSON layer on top of jsmn. A "node" is just a token index (-1 = none).
-//  Every helper accepts -1 and then returns a default, so lookups can be
-//  chained without checking each step.
-// ---------------------------------------------------------------------
-typedef struct {
-  char *text;
-  jsmntok_t *t;
-} Json;
+/* These names are editable: put your ground PNGs in resources/tiles/.
+ * Numbered variants: groundtop1.png, groundtop2.png, ...
+ * Single sprites: groundtowertop.png, groundtowermid.png, ...
+ */
+typedef enum {
+    GROUND_TOP, GROUND_MID, GROUND_BOTTOM,
+    GROUND_LEFT, GROUND_RIGHT,
+    GROUND_TOP_LEFT, GROUND_TOP_RIGHT,
+    GROUND_BOTTOM_LEFT, GROUND_BOTTOM_RIGHT,
+    GROUND_TOWER_TOP, GROUND_TOWER_MID, GROUND_TOWER_BOTTOM,
+    GROUND_PLATFORM, GROUND_SINGLE,
+    GROUND_COUNT
+} GroundType;
 
-static void JsonFree(Json *j) {
-  UnloadFileText(j->text);
-  free(j->t);
-  memset(j, 0, sizeof *j);
+static const char *groundNames[GROUND_COUNT] = {
+    "groundtop", "groundmid", "groundbottom",
+    "groundleft", "groundright",
+    "groundtopleft", "groundtopright",
+    "groundbottomleft", "groundbottomright",
+    "groundtowertop", "groundtowermid", "groundtowerbottom",
+    "groundplatform", "groundsingle"
+};
+
+typedef struct { Texture2D options[MAX_VARIANTS]; int count; } GroundArt;
+static GroundArt groundArt[GROUND_COUNT];
+static Texture2D crystalArt;
+static bool artLoaded;
+
+static void DirectoryOf(const char *path, char *out, size_t size) {
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    if (backslash && (!slash || backslash > slash)) slash = backslash;
+    size_t length = slash ? (size_t)(slash - path + 1) : 0;
+    if (length >= size) length = size - 1;
+    memcpy(out, path, length);
+    out[length] = 0;
 }
 
-static bool JsonLoad(Json *j, const char *path) {
-  memset(j, 0, sizeof *j);
-  j->text = LoadFileText(path);
-  if (!j->text)
-    return false;
-  size_t len = strlen(j->text);
-  jsmn_parser p;
-  jsmn_init(&p);
-  int n = jsmn_parse(&p, j->text, len, NULL, 0); // pass 1: count tokens
-  if (n > 0 && (j->t = malloc((size_t)n * sizeof *j->t))) {
-    jsmn_init(&p);
-    if (jsmn_parse(&p, j->text, len, j->t, (unsigned)n) == n) // pass 2: fill
-      return true;
-  }
-  JsonFree(j);
-  return false;
+static void MakePath(char *out, size_t size, const char *dir, const char *name) {
+    snprintf(out, size, "%s%s", dir, name);
 }
 
-// index of the token after node i and all of its children
-static int Next(const Json *j, int i) {
-  int n = i + 1;
-  for (int k = j->t[i].size; k > 0; k--)
-    n = Next(j, n);
-  return n;
-}
-
-static int Count(const Json *j, int i) {
-  return (i >= 0 && (j->t[i].type == JSMN_ARRAY || j->t[i].type == JSMN_OBJECT)) ? j->t[i].size : 0;
-}
-
-// for each child `it` of array `arr`
-#define EACH(j, arr, it)                                                                           \
-  for (int it = (arr) + 1, it##_n = Count(j, arr); it##_n-- > 0; it = Next(j, it))
-
-// value node of key k in object o, or -1
-static int Get(const Json *j, int o, const char *k) {
-  if (o < 0 || j->t[o].type != JSMN_OBJECT)
-    return -1;
-  size_t kl = strlen(k);
-  EACH(j, o, i) {
-    const jsmntok_t *t = &j->t[i];
-    if ((size_t)(t->end - t->start) == kl && !memcmp(j->text + t->start, k, kl))
-      return i + 1;
-  }
-  return -1;
-}
-
-static double NumAt(const Json *j, int i, double def) {
-  if (i < 0 || j->t[i].type != JSMN_PRIMITIVE)
-    return def;
-  char c = j->text[j->t[i].start];
-  return (c == '-' || (c >= '0' && c <= '9')) ? strtod(j->text + j->t[i].start, NULL) : def;
-}
-
-static double Num(const Json *j, int o, const char *k, double def) {
-  return NumAt(j, Get(j, o, k), def);
-}
-
-// idx-th item of a number array (0 if missing)
-static double ArrNum(const Json *j, int arr, int idx) {
-  if (idx >= Count(j, arr))
-    return 0.0;
-  int i = arr + 1;
-  while (idx-- > 0)
-    i = Next(j, i);
-  return NumAt(j, i, 0.0);
-}
-
-// copy string value of key k into buf ("" if missing / not a string)
-static const char *Str(const Json *j, int o, const char *k, char *buf, size_t n) {
-  int v = Get(j, o, k);
-  buf[0] = '\0';
-  if (v >= 0 && j->t[v].type == JSMN_STRING) {
-    size_t len = (size_t)(j->t[v].end - j->t[v].start);
-    if (len >= n)
-      len = n - 1;
-    memcpy(buf, j->text + j->t[v].start, len);
-    buf[len] = '\0';
-  }
-  return buf;
-}
-
-// is the string value of key k exactly v?
-static bool Is(const Json *j, int o, const char *k, const char *v) {
-  int s = Get(j, o, k);
-  size_t n = strlen(v);
-  return s >= 0 && j->t[s].type == JSMN_STRING && (size_t)(j->t[s].end - j->t[s].start) == n &&
-         !memcmp(j->text + j->t[s].start, v, n);
-}
-
-// ---------------------------------------------------------------------
-//  textures (one per tileset PNG, shared between layers)
-// ---------------------------------------------------------------------
-static int GetTexture(Level *lv, const char *dir, const char *rel) {
-  char full[256];
-  snprintf(full, sizeof full, "%s%s", dir, rel);
-
-  for (int i = 0; i < lv->texCount; i++)
-    if (strcmp(lv->texPath[i], full) == 0)
-      return i;
-
-  if (lv->texCount >= LEVEL_MAX_TILESETS) {
-    TraceLog(LOG_WARNING, "LEVEL: too many tilesets (max %d)", LEVEL_MAX_TILESETS);
-    return -1;
-  }
-  Texture2D t = Art_LoadPointTexture(full);
-  if (t.id == 0) {
-    TraceLog(LOG_WARNING,
-             "LEVEL: tileset '%s' failed to load (path is relative to the "
-             ".ldtk file)",
-             full);
-    return -1;
-  }
-
-  int idx = lv->texCount++;
-  lv->tex[idx] = t;
-  snprintf(lv->texPath[idx], sizeof lv->texPath[idx], "%s", full);
-  return idx;
-}
-
-// ---------------------------------------------------------------------
-//  tiles
-// ---------------------------------------------------------------------
-static void AddTile(Level *lv, LevelTile t) {
-  if (lv->tileCount == lv->tileCap) {
-    int cap = lv->tileCap ? lv->tileCap * 2 : 1024;
-    LevelTile *n = realloc(lv->tiles, (size_t)cap * sizeof(LevelTile));
-    if (!n)
-      return;
-    lv->tiles = n;
-    lv->tileCap = cap;
-  }
-  lv->tiles[lv->tileCount++] = t;
-  // Manually painted Destructible tiles are lethal and block bombs.
-  if (t.destructible) {
-    if (lv->hazardCount == lv->hazardCap) {
-      int cap = lv->hazardCap ? lv->hazardCap * 2 : 64;
-      Rectangle *rects = realloc(lv->hazards, (size_t)cap * sizeof *rects);
-      if (!rects) {
-        lv->tileCount--;
-        return;
-      }
-      lv->hazards = rects;
-      lv->hazardCap = cap;
-    }
-    lv->hazards[lv->hazardCount++] =
-        (Rectangle){t.px * SCALE, t.py * SCALE, t.size * SCALE, t.size * SCALE};
-  }
-}
-
-static void AddTiles(Level *lv, const Json *j, int arr, int tex, int size, int offX, int offY,
-                     bool destructible) {
-  EACH(j, arr, t) {
-    int px = Get(j, t, "px"), src = Get(j, t, "src");
-    LevelTile lt;
-    lt.px = (int)ArrNum(j, px, 0) + offX;
-    lt.py = (int)ArrNum(j, px, 1) + offY;
-    lt.sx = (int)ArrNum(j, src, 0);
-    lt.sy = (int)ArrNum(j, src, 1);
-    lt.size = size;
-    lt.flip = (unsigned char)((int)Num(j, t, "f", 0) & 3);
-    lt.tex = (unsigned char)tex;
-    lt.destructible = destructible;
-    lt.destroyed = false;
-    AddTile(lv, lt);
-  }
-}
-
-// ---------------------------------------------------------------------
-//  collision: IntGrid -> as few rectangles as possible
-//  Greedy merge: take the first free solid cell, grow right as far as
-//  possible, then grow down while the whole row below is solid + free.
-// ---------------------------------------------------------------------
-static void BuildSolids(Level *lv, const Json *j, int csv, int cw, int ch, int gs, int offX,
-                        int offY) {
-  int n = cw * ch;
-  int cap = 64;
-  lv->solids = malloc((size_t)cap * sizeof(Rectangle));
-  lv->solidCount = 0;
-  if (!lv->solids || n <= 0)
-    return;
-
-  unsigned char *solid = calloc((size_t)n, 1);
-  unsigned char *used = calloc((size_t)n, 1);
-  if (!solid || !used) {
-    free(solid);
-    free(used);
-    return;
-  }
-
-  // any value except "0" is solid (primitives have no children, so the
-  // tokens of the array are simply consecutive)
-  int i = 0;
-  EACH(j, csv, it) {
-    if (i >= n)
-      break;
-    const jsmntok_t *t = &j->t[it];
-    solid[i++] = (unsigned char)!(t->end - t->start == 1 && j->text[t->start] == '0');
-  }
-
-  for (int y = 0; y < ch; y++) {
-    for (int x = 0; x < cw; x++) {
-      int idx = y * cw + x;
-      if (!solid[idx] || used[idx])
-        continue;
-
-      int w = 1;
-      while (x + w < cw && solid[idx + w] && !used[idx + w])
-        w++;
-
-      int h = 1;
-      for (;;) {
-        if (y + h >= ch)
-          break;
-        bool ok = true;
-        for (int k = 0; k < w; k++) {
-          int jj = (y + h) * cw + x + k;
-          if (!solid[jj] || used[jj]) {
-            ok = false;
-            break;
-          }
+static void LoadGroundArt(void) {
+    if (artLoaded) return;
+    artLoaded = true;
+    for (int t = 0; t < GROUND_COUNT; t++) {
+        char path[160];
+        for (int i = 1; i <= MAX_VARIANTS; i++) {
+            snprintf(path, sizeof path, "tiles/%s%d.png", groundNames[t], i);
+            if (!FileExists(path)) continue;
+            Texture2D tex = LoadTexture(path);
+            if (tex.id) {
+                SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+                groundArt[t].options[groundArt[t].count++] = tex;
+            }
         }
-        if (!ok)
-          break;
-        h++;
-      }
-
-      for (int yy = 0; yy < h; yy++)
-        for (int xx = 0; xx < w; xx++)
-          used[(y + yy) * cw + x + xx] = 1;
-
-      if (lv->solidCount == cap) {
-        cap *= 2;
-        Rectangle *ns = realloc(lv->solids, (size_t)cap * sizeof(Rectangle));
-        if (!ns)
-          goto done;
-        lv->solids = ns;
-      }
-      lv->solids[lv->solidCount++] = (Rectangle){
-          (float)((x * gs + offX) * ART_TILE_SCALE), (float)((y * gs + offY) * ART_TILE_SCALE),
-          (float)(w * gs * ART_TILE_SCALE), (float)(h * gs * ART_TILE_SCALE)};
+        if (groundArt[t].count) continue;
+        snprintf(path, sizeof path, "tiles/%s.png", groundNames[t]);
+        if (FileExists(path)) {
+            Texture2D tex = LoadTexture(path);
+            if (tex.id) {
+                SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+                groundArt[t].options[groundArt[t].count++] = tex;
+            }
+        }
     }
-  }
-done:
-  free(solid);
-  free(used);
+    if (FileExists("tiles/crystal.png")) {
+        crystalArt = LoadTexture("tiles/crystal.png");
+        if (crystalArt.id) SetTextureFilter(crystalArt, TEXTURE_FILTER_POINT);
+    }
 }
 
-// ---------------------------------------------------------------------
-//  entities
-// ---------------------------------------------------------------------
-static void AddEntities(Level *lv, const Json *j, int list, int offX, int offY) {
-  EACH(j, list, e) {
-    char id[48];
-    Str(j, e, "__identifier", id, sizeof id);
-    int px = Get(j, e, "px");
-    double w = Num(j, e, "width", 0), h = Num(j, e, "height", 0);
-    // "px" is the entity's PIVOT point; convert to its top-left corner so any
-    // pivot setting works
-    int pv = Get(j, e, "__pivot");
-    double x = ArrNum(j, px, 0) + offX - ArrNum(j, pv, 0) * w;
-    double y = ArrNum(j, px, 1) + offY - ArrNum(j, pv, 1) * h;
-
-    if (strcmp(id, LDTK_PLAYER_START) == 0) {
-      lv->hasStart = true;
-      lv->start = (Vector2){(float)((x + w / 2.0) * SCALE), (float)((y + h) * SCALE)};
+static void UnloadGroundArt(void) {
+    if (!artLoaded) return;
+    for (int t = 0; t < GROUND_COUNT; t++) {
+        for (int i = 0; i < groundArt[t].count; i++)
+            UnloadTexture(groundArt[t].options[i]);
+        groundArt[t].count = 0;
     }
-    if (lv->entityCount < LEVEL_MAX_ENTITIES) {
-      LevelEntity *le = &lv->entities[lv->entityCount++];
-      snprintf(le->id, sizeof le->id, "%s", id);
-      le->r = (Rectangle){(float)(x * SCALE), (float)(y * SCALE), (float)(w * SCALE),
-                          (float)(h * SCALE)};
-    }
-  }
+    if (crystalArt.id) UnloadTexture(crystalArt);
+    crystalArt = (Texture2D){0};
+    artLoaded = false;
 }
 
-// ---------------------------------------------------------------------
-//  public API
-// ---------------------------------------------------------------------
-// grid size + total pixel offset of a layer
-static void LayerGrid(const Json *j, int layer, int *gs, int *ox, int *oy) {
-  *gs = (int)Num(j, layer, "__gridSize", 8);
-  *ox = (int)Num(j, layer, "__pxTotalOffsetX", Num(j, layer, "pxOffsetX", 0));
-  *oy = (int)Num(j, layer, "__pxTotalOffsetY", Num(j, layer, "pxOffsetY", 0));
+static bool IsWall(const Level *level, int x, int y) {
+    if (x < 0 || x >= level->columns || y < 0 || y >= level->rows) return false;
+    return level->cells[y * level->columns + x] == '#';
 }
 
-static bool Fill(Level *lv, const Json *root, Json *ext, const char *path, const char *levelId) {
-  // folder of the .ldtk file (tileset paths inside it are relative to this)
-  char dir[256];
-  {
-    const char *a = strrchr(path, '/'), *b = strrchr(path, '\\');
-    const char *s = (b && (!a || b > a)) ? b : a;
-    size_t n = s ? (size_t)(s - path) + 1 : 0;
-    if (n >= sizeof dir)
-      n = sizeof dir - 1;
-    memcpy(dir, path, n);
-    dir[n] = '\0';
-  }
+/* Narrow 1-cell-wide columns get their own tower artwork.
+ * Other blocks use their exposed edges and corners.
+ * Add extra rules here as you add terrain sprites.
+ */
+static GroundType ChooseGround(const Level *level, int x, int y) {
+    bool up = IsWall(level, x, y - 1);
+    bool down = IsWall(level, x, y + 1);
+    bool left = IsWall(level, x - 1, y);
+    bool right = IsWall(level, x + 1, y);
 
-  // pick the level
-  int level = -1;
-  EACH(root, Get(root, 0, "levels"), l) {
-    if (!levelId || Is(root, l, "identifier", levelId)) {
-      level = l;
-      break;
+    if (!left && !right) {
+        if (!up && down) return GROUND_TOWER_TOP;
+        if (up && down) return GROUND_TOWER_MID;
+        if (up && !down) return GROUND_TOWER_BOTTOM;
+        return GROUND_SINGLE;
     }
-  }
-  if (level < 0) {
-    TraceLog(LOG_WARNING, "LEVEL: level '%s' not found in '%s'", levelId ? levelId : "(first)",
-             path);
-    return false;
-  }
+    if (!up && !down) return GROUND_PLATFORM;
+    if (!up && !left) return GROUND_TOP_LEFT;
+    if (!up && !right) return GROUND_TOP_RIGHT;
+    if (!down && !left) return GROUND_BOTTOM_LEFT;
+    if (!down && !right) return GROUND_BOTTOM_RIGHT;
+    if (!up) return GROUND_TOP;
+    if (!down) return GROUND_BOTTOM;
+    if (!left) return GROUND_LEFT;
+    if (!right) return GROUND_RIGHT;
+    return GROUND_MID;
+}
 
-  // layer data (null in the main file when "Save levels to separate files" is
-  // on)
-  const Json *j = root;
-  int layers = Get(root, level, "layerInstances");
-  if (layers < 0 || root->t[layers].type != JSMN_ARRAY) {
-    char rel[256], full[512];
-    Str(root, level, "externalRelPath", rel, sizeof rel);
-    snprintf(full, sizeof full, "%s%s", dir, rel);
-    if (rel[0] && FileExists(full) && JsonLoad(ext, full)) {
-      j = ext;
-      layers = Get(ext, 0, "layerInstances");
-    } else
-      layers = -1;
-  }
-  if (layers < 0 || j->t[layers].type != JSMN_ARRAY) {
-    TraceLog(LOG_WARNING, "LEVEL: no layer data found (is the .ldtkl file next to the .ldtk?)");
-    return false;
-  }
+/* Coordinate-based variation: looks random but never flickers or changes
+ * when a level is restarted. No rand()/GetRandomValue() needed. */
+static int Variation(int x, int y, int count) {
+    unsigned int h = (unsigned int)x * 73856093u;
+    h ^= (unsigned int)y * 19349663u;
+    h ^= h >> 13;
+    return (int)(h % (unsigned int)count);
+}
 
-  lv->width = (float)(Num(root, level, "pxWid", 0) * SCALE);
-  lv->height = (float)(Num(root, level, "pxHei", 0) * SCALE);
+static void DrawSprite(Texture2D tex, Rectangle rectangle) {
+    DrawTexturePro(tex, (Rectangle){0, 0, (float)tex.width, (float)tex.height},
+                   rectangle, (Vector2){0, 0}, 0, WHITE);
+}
 
-  int count = Count(j, layers);
-  int *list = malloc((size_t)(count > 0 ? count : 1) * sizeof(int));
-  if (!list)
-    return false;
-  int n = 0;
-  EACH(j, layers, ly) list[n++] = ly;
+static void DrawGround(const Level *level, int x, int y) {
+    GroundType type = ChooseGround(level, x, y);
+    GroundArt art = groundArt[type];
+    if (!art.count) art = groundArt[GROUND_MID];
+    Rectangle r = {(float)(x * LEVEL_TILE_SIZE), (float)(y * LEVEL_TILE_SIZE),
+                   LEVEL_TILE_SIZE, LEVEL_TILE_SIZE};
+    if (art.count) DrawSprite(art.options[Variation(x, y, art.count)], r);
+    else DrawRectangleRec(r, (Color){82, 101, 118, 255});
+}
 
-  // 1) collision layer: the one named LDTK_COLLISION_LAYER, else the first
-  // IntGrid layer
-  int coll = -1;
-  for (int i = 0; i < n; i++) {
-    if (!Is(j, list[i], "__type", "IntGrid"))
-      continue;
-    if (Is(j, list[i], "__identifier", LDTK_COLLISION_LAYER)) {
-      coll = list[i];
-      break;
+static void DrawCrystals(const Level *level, Rectangle view) {
+    for (int i = 0; i < level->crystalCount; i++) {
+        if (level->crystalTaken[i]) continue;
+        Rectangle r = level->crystals[i];
+        if (!CheckCollisionRecs(r, view)) continue;
+        if (crystalArt.id) DrawSprite(crystalArt, r);
+        else {
+            DrawRectangleRec((Rectangle){r.x + 8, r.y + 4, 16, 24}, SKYBLUE);
+            DrawRectangleLinesEx((Rectangle){r.x + 8, r.y + 4, 16, 24}, 2, WHITE);
+        }
     }
-    if (coll < 0 && !Is(j, list[i], "__identifier", LDTK_DESTRUCTIBLE_LAYER))
-      coll = list[i];
-  }
-  if (coll >= 0) {
-    int gs, ox, oy;
-    LayerGrid(j, coll, &gs, &ox, &oy);
-    BuildSolids(lv, j, Get(j, coll, "intGridCsv"), (int)Num(j, coll, "__cWid", 0),
-                (int)Num(j, coll, "__cHei", 0), gs, ox, oy);
-  } else
-    TraceLog(LOG_WARNING, "LEVEL: no IntGrid layer named '%s' - nothing is solid!",
-             LDTK_COLLISION_LAYER);
+}
 
-  // Destructible is a regular Tiles layer: collision comes from its painted tiles.
-  for (int i = 0; i < n; i++)
-    if (Is(j, list[i], "__identifier", LDTK_DESTRUCTIBLE_LAYER) &&
-        !Is(j, list[i], "__type", "Tiles"))
-      TraceLog(LOG_WARNING, "LEVEL: 'Destructible' must be a Tiles layer");
-
-  // 2) tiles + entities. LDtk lists layers top-most first, so draw them in
-  // reverse.
-  for (int i = n - 1; i >= 0; i--) {
-    int layer = list[i], gs, ox, oy;
-    LayerGrid(j, layer, &gs, &ox, &oy);
-
-    char rel[256];
-    if (Str(j, layer, "__tilesetRelPath", rel, sizeof rel)[0]) {
-      int tex = GetTexture(lv, dir, rel);
-      if (tex >= 0) {
-        bool destructible = Is(j, layer, "__identifier", LDTK_DESTRUCTIBLE_LAYER) &&
-                            Is(j, layer, "__type", "Tiles");
-        AddTiles(lv, j, Get(j, layer, "autoLayerTiles"), tex, gs, ox, oy, destructible);
-        AddTiles(lv, j, Get(j, layer, "gridTiles"), tex, gs, ox, oy, destructible);
-      }
+/* levels.txt contains: LEVEL 01_Intro.txt, LEVEL 02_Cave.txt, ... */
+static int ReadIndex(const char *path, char names[][64], char files[][256], int capacity) {
+    char dir[512], index[768], line[512];
+    DirectoryOf(path, dir, sizeof dir);
+    MakePath(index, sizeof index, dir, "levels.txt");
+    FILE *f = fopen(index, "rb");
+    if (!f) { TraceLog(LOG_WARNING, "LEVEL: cannot open %s", index); return 0; }
+    int count = 0;
+    while (count < capacity && fgets(line, sizeof line, f)) {
+        char filename[256], full[768], name[64] = "";
+        if (sscanf(line, "LEVEL %255s", filename) != 1) continue;
+        MakePath(full, sizeof full, dir, filename);
+        FILE *lf = fopen(full, "rb");
+        if (!lf) continue;
+        char header[512];
+        while (fgets(header, sizeof header, lf)) {
+            if (sscanf(header, "NAME %63s", name) == 1) break;
+        }
+        fclose(lf);
+        if (!name[0]) continue;
+        snprintf(names[count], 64, "%s", name);
+        snprintf(files[count], 256, "%s", filename);
+        count++;
     }
-    if (Is(j, layer, "__type", "Entities"))
-      AddEntities(lv, j, Get(j, layer, "entityInstances"), ox, oy);
-  }
-
-  char id[64];
-  TraceLog(LOG_INFO, "LEVEL: loaded '%s' - %d solids, %d tiles, %d entities%s",
-           Str(root, level, "identifier", id, sizeof id), lv->solidCount, lv->tileCount,
-           lv->entityCount, lv->hasStart ? "" : " (no PlayerStart entity)");
-
-  free(list);
-  return true;
+    fclose(f);
+    return count;
 }
 
 int Level_List(const char *path, char names[][64], int capacity) {
-  Json j;
-  if (!JsonLoad(&j, path))
-    return 0;
-  int count = 0;
-  EACH((&j), Get(&j, 0, "levels"), l) {
-    if (count >= capacity)
-      break;
-    Str(&j, l, "identifier", names[count], 64);
-    if (names[count][0])
-      count++;
-  }
-  JsonFree(&j);
-  return count;
+    if (capacity <= 0) return 0;
+    char (*files)[256] = calloc((size_t)capacity, sizeof *files);
+    if (!files) return 0;
+    int count = ReadIndex(path, names, files, capacity);
+    free(files);
+    return count;
 }
 
-bool Level_Load(Level *lv, const char *path, const char *levelId) {
-  memset(lv, 0, sizeof *lv);
-
-  Json root, ext;
-  memset(&ext, 0, sizeof ext);
-  if (!FileExists(path)) {
-    TraceLog(LOG_WARNING, "LEVEL: '%s' not found", path);
-    return false;
-  }
-  if (!JsonLoad(&root, path)) {
-    TraceLog(LOG_WARNING, "LEVEL: '%s' is not valid JSON", path);
-    return false;
-  }
-  bool ok = Fill(lv, &root, &ext, path, levelId);
-  JsonFree(&ext);
-  JsonFree(&root);
-  return ok;
-}
-
-void Level_Unload(Level *lv) {
-  free(lv->solids);
-  free(lv->hazards);
-  free(lv->tiles);
-  for (int i = 0; i < lv->texCount; i++)
-    UnloadTexture(lv->tex[i]);
-  memset(lv, 0, sizeof *lv);
-}
-
-void Level_Draw(const Level *lv, Rectangle view) {
-  for (int i = 0; i < lv->tileCount; i++) {
-    const LevelTile *t = &lv->tiles[i];
-    if (t->destroyed)
-      continue;
-    float s = t->size * SCALE;
-    Rectangle dst = {t->px * SCALE, t->py * SCALE, s, s};
-    if (dst.x + s < view.x || dst.x > view.x + view.width || dst.y + s < view.y ||
-        dst.y > view.y + view.height)
-      continue;
-
-    Rectangle src = {(float)t->sx, (float)t->sy, (t->flip & 1) ? -(float)t->size : (float)t->size,
-                     (t->flip & 2) ? -(float)t->size : (float)t->size};
-    DrawTexturePro(lv->tex[t->tex], src, dst, (Vector2){0, 0}, 0.0f, WHITE);
-  }
-}
-
-// Destructible cells never merge with ordinary Collision ground.
-bool Level_TouchesDestructible(const Level *lv, Rectangle box) {
-  for (int i = 0; i < lv->hazardCount; i++)
-    if (CheckCollisionRecs(box, lv->hazards[i]))
-      return true;
-  return false;
-}
-
-int Level_Explode(Level *lv, Vector2 center, float radius) {
-  int destroyed = 0;
-  for (int i = 0; i < lv->hazardCount;) {
-    Rectangle r = lv->hazards[i];
-    float x = fmaxf(r.x, fminf(center.x, r.x + r.width));
-    float y = fmaxf(r.y, fminf(center.y, r.y + r.height));
-    if ((x - center.x) * (x - center.x) + (y - center.y) * (y - center.y) > radius * radius) {
-      i++;
-      continue;
+/* Convert # runs to collision rectangles; one rectangle per horizontal run.
+ * This remains compatible with main.c's Solid() collision checks. */
+static bool BuildSolids(Level *level) {
+    int total = 0;
+    for (int y = 0; y < level->rows; y++)
+        for (int x = 0; x < level->columns; x++)
+            if (IsWall(level, x, y) && !IsWall(level, x - 1, y)) total++;
+    level->solids = calloc((size_t)(total ? total : 1), sizeof(Rectangle));
+    if (!level->solids) return false;
+    for (int y = 0; y < level->rows; y++) {
+        int x = 0;
+        while (x < level->columns) {
+            if (!IsWall(level, x, y)) { x++; continue; }
+            int start = x;
+            while (x < level->columns && IsWall(level, x, y)) x++;
+            level->solids[level->solidCount++] = (Rectangle){
+                (float)(start * LEVEL_TILE_SIZE), (float)(y * LEVEL_TILE_SIZE),
+                (float)((x - start) * LEVEL_TILE_SIZE), LEVEL_TILE_SIZE};
+        }
     }
+    return true;
+}
 
-    // Hide the corresponding manually painted destructible tile, not regular ground.
-    for (int t = 0; t < lv->tileCount; t++) {
-      LevelTile *tile = &lv->tiles[t];
-      if (!tile->destructible || tile->destroyed)
-        continue;
-      float size = tile->size * SCALE;
-      Vector2 midpoint = {tile->px * SCALE + size * 0.5f, tile->py * SCALE + size * 0.5f};
-      if (CheckCollisionPointRec(midpoint, r))
-        tile->destroyed = true;
+/* P is the TOP-left 8x16 LDtk entity, not a 1-cell-tall player.
+ * Match the original Respawn(): start is its bottom-center in world pixels.
+ */
+static bool FindObjects(Level *level) {
+    int spawnCount = 0;
+    for (int y = 0; y < level->rows; y++) {
+        for (int x = 0; x < level->columns; x++) {
+            char c = level->cells[y * level->columns + x];
+            if (c == 'P') {
+                spawnCount++;
+                level->start = (Vector2){x * LEVEL_TILE_SIZE + 16,
+                                         y * LEVEL_TILE_SIZE + 2 * LEVEL_TILE_SIZE};
+                level->hasStart = true;
+                if (y + 1 >= level->rows ||
+                    level->cells[(y + 1) * level->columns + x] != '.') {
+                    TraceLog(LOG_WARNING, "LEVEL: P needs one empty cell below at (%d,%d)", x, y);
+                    return false;
+                }
+            }
+            if (c == '*') {
+                if (level->crystalCount >= LEVEL_MAX_CRYSTALS) {
+                    TraceLog(LOG_WARNING, "LEVEL: more than three frost crystals");
+                    return false;
+                }
+                level->crystals[level->crystalCount++] = (Rectangle){
+                    (float)(x * LEVEL_TILE_SIZE), (float)(y * LEVEL_TILE_SIZE),
+                    LEVEL_TILE_SIZE, LEVEL_TILE_SIZE};
+            }
+        }
     }
-    // Swap-remove; no stale collision rectangles, no changing permanent solids.
-    lv->hazards[i] = lv->hazards[--lv->hazardCount];
-    destroyed++;
-  }
-  return destroyed;
+    if (spawnCount != 1) TraceLog(LOG_WARNING, "LEVEL: expected one P, found %d", spawnCount);
+    return spawnCount == 1;
+}
+
+static bool ReadMap(FILE *file, Level *level) {
+    char line[MAX_GRID + 16];
+    for (int y = 0; y < level->rows; y++) {
+        if (!fgets(line, sizeof line, file)) return false;
+        size_t length = strcspn(line, "\r\n");
+        if (length != (size_t)level->columns) {
+            TraceLog(LOG_WARNING, "LEVEL: map row %d has %d cells, expected %d", y,
+                     (int)length, level->columns);
+            return false;
+        }
+        for (int x = 0; x < level->columns; x++) {
+            char c = line[x];
+            if (c != '#' && c != '.' && c != 'P' && c != '*') return false;
+            level->cells[y * level->columns + x] = c;
+        }
+    }
+    if (!fgets(line, sizeof line, file)) return false;
+    return strncmp(line, "END_MAP", 7) == 0;
+}
+
+static bool ReadLevelFile(Level *level, const char *filename) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) { TraceLog(LOG_WARNING, "LEVEL: cannot open %s", filename); return false; }
+    char line[512];
+    int cellSize = 0, width = 0, height = 0;
+    bool foundMap = false;
+    while (fgets(line, sizeof line, file)) {
+        if (sscanf(line, "CELL_SIZE %d", &cellSize) == 1) continue;
+        if (sscanf(line, "SIZE %d %d", &width, &height) == 2) continue;
+        if (strncmp(line, "MAP", 3) == 0) { foundMap = true; break; }
+    }
+    bool ok = foundMap && cellSize == LEVEL_TILE_SIZE &&
+              width > 0 && height > 0 && width <= MAX_GRID && height <= MAX_GRID;
+    if (ok) {
+        level->columns = width;
+        level->rows = height;
+        level->width = (float)(width * LEVEL_TILE_SIZE);
+        level->height = (float)(height * LEVEL_TILE_SIZE);
+        level->cells = calloc((size_t)width * height, 1);
+        ok = level->cells && ReadMap(file, level) && FindObjects(level) && BuildSolids(level);
+    }
+    fclose(file);
+    if (!ok) TraceLog(LOG_WARNING, "LEVEL: invalid ASCII map or spawn: %s", filename);
+    return ok;
+}
+
+bool Level_Load(Level *level, const char *path, const char *levelId) {
+    memset(level, 0, sizeof *level);
+    char names[64][64], files[64][256], directory[512], full[768];
+    int count = ReadIndex(path, names, files, 64);
+    if (!count) return false;
+    int chosen = 0;
+    if (levelId && levelId[0]) {
+        chosen = -1;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(names[i], levelId) == 0) { chosen = i; break; }
+        }
+        if (chosen < 0) { TraceLog(LOG_WARNING, "LEVEL: unknown level %s", levelId); return false; }
+    }
+    DirectoryOf(path, directory, sizeof directory);
+    MakePath(full, sizeof full, directory, files[chosen]);
+    if (!ReadLevelFile(level, full)) {
+        Level_Unload(level);
+        return false;
+    }
+    LoadGroundArt();
+    TraceLog(LOG_INFO, "LEVEL: loaded %s (%dx%d, %d crystals)", names[chosen],
+             level->columns, level->rows, level->crystalCount);
+    return true;
+}
+
+void Level_Unload(Level *level) {
+    free(level->cells);
+    free(level->solids);
+    memset(level, 0, sizeof *level);
+    // Keep ground textures cached between level changes to avoid reloading.
+    // Call Level_UnloadArt() once when the game closes, if desired.
+}
+
+void Level_UnloadArt(void) { UnloadGroundArt(); }
+
+void Level_Draw(const Level *level, Rectangle view) {
+    if (!level->cells) return;
+    int firstX = (int)(view.x / LEVEL_TILE_SIZE) - 1;
+    int firstY = (int)(view.y / LEVEL_TILE_SIZE) - 1;
+    int lastX = (int)((view.x + view.width) / LEVEL_TILE_SIZE) + 1;
+    int lastY = (int)((view.y + view.height) / LEVEL_TILE_SIZE) + 1;
+    if (firstX < 0) firstX = 0;
+    if (firstY < 0) firstY = 0;
+    if (lastX >= level->columns) lastX = level->columns - 1;
+    if (lastY >= level->rows) lastY = level->rows - 1;
+    for (int y = firstY; y <= lastY; y++)
+        for (int x = firstX; x <= lastX; x++)
+            if (IsWall(level, x, y)) DrawGround(level, x, y);
+    DrawCrystals(level, view);
+}
+
+int Level_CollectCrystals(Level *level, Rectangle player) {
+    int collected = 0;
+    for (int i = 0; i < level->crystalCount; i++) {
+        if (!level->crystalTaken[i] && CheckCollisionRecs(player, level->crystals[i])) {
+            level->crystalTaken[i] = true;
+            collected++;
+        }
+    }
+    return collected;
 }
