@@ -588,13 +588,7 @@ static void DrawWorld(void) {
   if (artScale < 1)
     artScale = 1;
   float zoom = (float)artScale / ART_PIXEL;
-  float alpha = Clamp(accumulator / PHYSICS_DT, 0, 1);
   Rectangle drawn = player.box;
-  if (fabsf(drawn.x - previousBox.x) < 64 &&
-      fabsf(drawn.y - previousBox.y) < 64) {
-    drawn.x = previousBox.x + (drawn.x - previousBox.x) * alpha;
-    drawn.y = previousBox.y + (drawn.y - previousBox.y) * alpha;
-  }
   Camera2D fullCam = {0};
   fullCam.target =
       (Vector2){floorf((drawn.x + drawn.width / 2) / ART_PIXEL) * ART_PIXEL,
@@ -665,6 +659,7 @@ static void DrawWorld(void) {
 }
 int main(void) {
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
+  SetBorderless(borderless);
   InitWindow(1280, 720, "Overheat");
   SetExitKey(KEY_NULL);
   SearchAndSetResourceDir("resources");
