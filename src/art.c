@@ -81,7 +81,8 @@ void Art_DrawPlayer(const ArtPlayer *p) {
 
   // Center and feet snap to the art grid; stretched edges snap to screen px.
   float cx = SnapToArtPixel(p->box.x + p->box.width / 2 - w / 2) + w / 2;
-  float feet = SnapToArtPixel(p->box.y + p->box.height - h) + h;
+  // Round the feet up: a landing can stop up to one step above the ground.
+  float feet = ceilf((p->box.y + p->box.height) / ART_PIXEL) * ART_PIXEL;
   float x0 = RoundToScreen(cx - w * sx / 2, zoom);
   float x1 = RoundToScreen(cx + w * sx / 2, zoom);
   float y0 = RoundToScreen(feet - h * sy, zoom);

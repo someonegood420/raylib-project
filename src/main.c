@@ -191,32 +191,6 @@ static void AddHeat(float amount) {
   if (player.heat >= 100)
     player.overheated = true;
 }
-// A blocked step leaves the player up to a few pixels short of the surface.
-// Close that gap so the box rests exactly against it; otherwise the art-grid
-// snap in Art_DrawPlayer shows the sprite one art pixel off the ground.
-static void SettleAgainstSolid(bool horizontal, float step) {
-  float dir = step > 0 ? 1.0f : -1.0f;
-  float left = fabsf(step);
-  while (left >= 1.0f) {
-    Rectangle next = player.box;
-    if (horizontal)
-      next.x += dir;
-    else
-      next.y += dir;
-    if (Solid(next))
-      break;
-    player.box = next;
-    left -= 1.0f;
-  }
-  // Less than 1px remains: move to the whole pixel that touches the surface.
-  Rectangle snap = player.box;
-  if (horizontal)
-    snap.x = dir > 0 ? ceilf(snap.x) : floorf(snap.x);
-  else
-    snap.y = dir > 0 ? ceilf(snap.y) : floorf(snap.y);
-  if (!Solid(snap))
-    player.box = snap;
-}
 // Move in 4-pixel increments so high-speed bursts do not tunnel through walls.
 static int MoveAxis(float distance, bool horizontal) {
   int wallDir = 0;
@@ -228,7 +202,6 @@ static int MoveAxis(float distance, bool horizontal) {
     else
       next.y += step;
     if (Solid(next)) {
-      SettleAgainstSolid(horizontal, step);
       if (horizontal) {
         wallDir = step > 0 ? 1 : -1;
         player.vel.x = 0;
