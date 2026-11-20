@@ -11,12 +11,11 @@ typedef struct {
   Rectangle box;
   bool facingRight;
   bool hot, chargedFlash;
-  float sx, sy;
+  float sx, sy; // squash/stretch, 0 means 1
+  float zoom;   // screen pixels per world pixel (camera zoom), 0 means 1
 } ArtPlayer;
-Texture2D Art_LoadPointTexture(const char *path);
 void Art_Load(void);
 void Art_Unload(void);
 void Art_UpdatePlayerAnim(AnimId id, float dt);
-void Art_SetZoom(float zoom);
 void Art_DrawPlayer(const ArtPlayer *player);
 #endif

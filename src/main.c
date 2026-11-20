@@ -1,5 +1,3 @@
-// Overheat: precision platformer in C + raylib.
-// J/Z jump, K hold/release to burst, A/D move, Esc pause, F1 debug, R restart.
 #include "art.h"
 #include "fx.h"
 #include "level.h"
@@ -13,7 +11,6 @@
 #define PHYSICS_DT (1.0f / 240.0f)
 #define PLAYER_W 40.0f
 #define PLAYER_H 64.0f
-// Movement tuning retained from the original BombRush controller.
 #define FALL_GRAV_MULT 1.5f
 #define MAX_FALL_SPEED 800.0f
 #define FAST_FALL_MULT 5.0f
@@ -42,7 +39,6 @@
 #define ALLOW_JUMP_WHILE_RISING true
 #define WALL_JUMP_FORCE_X 544.0f
 #define WALL_JUMP_FORCE_Y 480.0f
-// CLIMB_JUMP_FORCE omitted: wall climbing has been removed.
 #define WALL_JUMP_GRACE 0.1f
 #define WALL_JUMP_RUN_LERP 0.5f
 #define WALL_JUMP_TIME 0.2f
@@ -63,6 +59,12 @@
 #define STEP_SIZE 4.0f
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+// art is authored for a 320x180 virtual screen, scaled by whole numbers.
+#define VIRT_W 320
+#define VIRT_H 180
+// art and level code each define the tile size; they must agree.
+_Static_assert(ART_TILE_PX == LEVEL_TILE_SIZE,
+               "ART_TILE_PX and LEVEL_TILE_SIZE must match");
 
 typedef struct {
   Rectangle box;
@@ -101,17 +103,17 @@ static WaterBoss water;
 static Menu menu = MENU_MAIN;
 static bool debug, quitRequested, jumpQueued;
 static float accumulator;
-static RenderTexture2D pixelTarget, sceneTarget;
+static RenderTexture2D pixelTarget;
 static Rectangle previousBox;
-// Read once per physics step and shared by the movement functions.
+// read once per physics step and shared by the movement functions.
 typedef struct {
   int moveDir, burstDir;
   bool jumpHeld, burstHeld, fastFall;
 } Input;
 static Input input;
 
-// Manual borderless window: undecorated + sized/positioned to the monitor.
-// Avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
+// manual borderless window: undecorated + sized/positioned to the monitor.
+// avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
 // like exclusive fullscreen. The 1px height reduction is a Windows workaround.
 static bool borderless = true;
 static void SetBorderless(bool on) {
@@ -535,8 +537,10 @@ static void DrawPauseMenu(void) {
   if (Button("Main Menu", y + 165, 280))
     menu = MENU_MAIN;
 }
-// Original hybrid renderer: pixel-art world + full-resolution player.
-// Physics is interpolated only for drawing, never for collision checks.
+// Hybrid renderer: pixel-art world + full-resolution player.
+// Pass 1 draws the world into a small texture on the art-pixel grid.
+// Pass 2 upscales it by a whole number and draws the player at full
+// resolution, straight to the screen (no second full-size render texture).
 // World layer, drawn in the low-resolution render texture.
 static void DrawLevel(Rectangle view) { Level_Draw(&level, view); }
 static void DrawWaterBoss(Rectangle view) {
@@ -550,7 +554,7 @@ static void DrawCrystals(void) {
       DrawRectangleLinesEx(level.crystals[i], 2, (Color){145, 240, 255, 180});
 }
 // Player is drawn only in the full-resolution camera pass.
-static void DrawPlayer(Rectangle drawn) {
+static void DrawPlayer(Rectangle drawn, float zoom) {
   Art_DrawPlayer(&(ArtPlayer){
       .box = drawn,
       .facingRight = player.facingRight,
@@ -558,7 +562,8 @@ static void DrawPlayer(Rectangle drawn) {
       .chargedFlash = player.charging && player.charge >= BURST_CHARGE_TIME &&
                       !player.overheated,
       .sx = 1.0f,
-      .sy = 1.0f});
+      .sy = 1.0f,
+      .zoom = zoom});
 }
 static void DrawHud(int winW, int winH) {
   DrawRectangle(20, 18, 220, 16, (Color){50, 50, 50, 255});
@@ -580,80 +585,86 @@ static void DrawHud(int winW, int winH) {
            GRAY);
 }
 
+typedef struct {
+  int scale;      // screen pixels per art pixel (whole number)
+  int lowW, lowH; // pixelTarget size in art pixels
+  Camera2D cam;   // full-res camera: world -> screen
+  Rectangle view; // world rectangle covered by pixelTarget
+} WorldView;
+
+// everything that depends on window size and camera focus, in one place.
+static WorldView MakeWorldView(Rectangle focus, int winW, int winH) {
+  WorldView v;
+  // round so a borderless window 1px short (e.g. 1920x1079) keeps its scale.
+  v.scale = (int)roundf(fminf(winW / (float)VIRT_W, winH / (float)VIRT_H));
+  if (v.scale < 1)
+    v.scale = 1;
+  // even size plus margin so the snapped view always covers the window.
+  v.lowW = ((int)ceilf(winW / (float)v.scale) + 3) & ~1;
+  v.lowH = ((int)ceilf(winH / (float)v.scale) + 3) & ~1;
+
+  // snap the camera to the art-pixel grid; both passes share this target.
+  Vector2 target = {floorf((focus.x + focus.width / 2) / ART_PIXEL) * ART_PIXEL,
+                    floorf((focus.y + focus.height) / ART_PIXEL) * ART_PIXEL -
+                        40};
+  v.cam = (Camera2D){.target = target,
+                     .offset = {floorf(winW / 2.0f), floorf(winH / 2.0f)},
+                     .rotation = 0,
+                     .zoom = (float)v.scale / ART_PIXEL};
+  v.view =
+      (Rectangle){target.x - v.lowW * ART_PIXEL / 2.0f,
+                  target.y - v.lowH * ART_PIXEL / 2.0f,
+                  (float)(v.lowW * ART_PIXEL), (float)(v.lowH * ART_PIXEL)};
+  return v;
+}
+
+// (re)create a point-filtered render texture only when its size changes.
+static void EnsureTarget(RenderTexture2D *t, int w, int h) {
+  if (t->id && t->texture.width == w && t->texture.height == h)
+    return;
+  if (t->id)
+    UnloadRenderTexture(*t);
+  *t = LoadRenderTexture(w, h);
+  SetTextureFilter(t->texture, TEXTURE_FILTER_POINT);
+}
+
 static void DrawWorld(void) {
   int winW = GetScreenWidth(), winH = GetScreenHeight();
-  // Round to keep the intended scale when borderless is 1px short (e.g.
-  // 1920x1079).
-  int artScale = (int)roundf(fminf(winW / 320.0f, winH / 180.0f));
-  if (artScale < 1)
-    artScale = 1;
-  float zoom = (float)artScale / ART_PIXEL;
   Rectangle drawn = player.box;
-  Camera2D fullCam = {0};
-  fullCam.target =
-      (Vector2){floorf((drawn.x + drawn.width / 2) / ART_PIXEL) * ART_PIXEL,
-                floorf((drawn.y + drawn.height) / ART_PIXEL) * ART_PIXEL - 40};
-  fullCam.offset = (Vector2){floorf(winW / 2.0f), floorf(winH / 2.0f)};
-  fullCam.zoom = zoom;
-  Art_SetZoom(zoom);
+  WorldView v = MakeWorldView(drawn, winW, winH);
+  EnsureTarget(&pixelTarget, v.lowW, v.lowH);
 
-  int lowW = ((int)ceilf(winW / (float)artScale) + 3) & ~1;
-  int lowH = ((int)ceilf(winH / (float)artScale) + 3) & ~1;
-  Vector2 snapped = {floorf(fullCam.target.x / ART_PIXEL + 0.5f) * ART_PIXEL,
-                     floorf(fullCam.target.y / ART_PIXEL + 0.5f) * ART_PIXEL};
-  Camera2D pixelCam = {0};
-  pixelCam.target = snapped;
-  pixelCam.offset = (Vector2){lowW / 2.0f, lowH / 2.0f};
-  pixelCam.zoom = 1.0f / ART_PIXEL;
-  Rectangle view = {snapped.x - lowW * ART_PIXEL / 2.0f,
-                    snapped.y - lowH * ART_PIXEL / 2.0f, lowW * ART_PIXEL,
-                    lowH * ART_PIXEL};
-  if (!pixelTarget.id || pixelTarget.texture.width != lowW ||
-      pixelTarget.texture.height != lowH) {
-    if (pixelTarget.id)
-      UnloadRenderTexture(pixelTarget);
-    pixelTarget = LoadRenderTexture(lowW, lowH);
-    SetTextureFilter(pixelTarget.texture, TEXTURE_FILTER_POINT);
-  }
-  if (!sceneTarget.id || sceneTarget.texture.width != winW ||
-      sceneTarget.texture.height != winH) {
-    if (sceneTarget.id)
-      UnloadRenderTexture(sceneTarget);
-    sceneTarget = LoadRenderTexture(winW, winH);
-    SetTextureFilter(sceneTarget.texture, TEXTURE_FILTER_POINT);
-  }
   // Pass 1: tiles, boss, and effects on the native pixel grid.
+  Camera2D pixelCam = {.target = v.cam.target,
+                       .offset = {v.lowW / 2.0f, v.lowH / 2.0f},
+                       .rotation = 0,
+                       .zoom = 1.0f / ART_PIXEL};
   BeginTextureMode(pixelTarget);
   ClearBackground((Color){18, 24, 35, 255});
   BeginMode2D(pixelCam);
-  DrawLevel(view);
-  DrawWaterBoss(view);
+  DrawLevel(v.view);
+  DrawWaterBoss(v.view);
   DrawCrystals();
   Fx_Draw();
   EndMode2D();
   EndTextureMode();
 
-  // Pass 2: upscale world by whole pixels, then draw the player in full res.
-  BeginTextureMode(sceneTarget);
-  ClearBackground(BLACK);
-  Vector2 topLeft = GetWorldToScreen2D((Vector2){view.x, view.y}, fullCam);
+  // Pass 2: upscale by whole pixels, then the player in full resolution.
+  // drawn straight to the screen; BeginDrawing() already cleared it.
+  Vector2 topLeft = GetWorldToScreen2D((Vector2){v.view.x, v.view.y}, v.cam);
   DrawTexturePro(pixelTarget.texture,
-                 (Rectangle){0, 0, (float)lowW, -(float)lowH},
-                 (Rectangle){topLeft.x, topLeft.y, (float)(lowW * artScale),
-                             (float)(lowH * artScale)},
+                 (Rectangle){0, 0, (float)v.lowW, -(float)v.lowH},
+                 (Rectangle){topLeft.x, topLeft.y, (float)(v.lowW * v.scale),
+                             (float)(v.lowH * v.scale)},
                  (Vector2){0, 0}, 0, WHITE);
-  BeginMode2D(fullCam);
-  DrawPlayer(drawn);
+  BeginMode2D(v.cam);
+  DrawPlayer(drawn, v.cam.zoom);
   if (debug) {
     for (int i = 0; i < level.solidCount; i++)
       DrawRectangleLinesEx(level.solids[i], 2, GREEN);
     DrawRectangleLinesEx(drawn, 2, RED);
   }
   EndMode2D();
-  EndTextureMode();
-  DrawTexturePro(
-      sceneTarget.texture, (Rectangle){0, 0, (float)winW, -(float)winH},
-      (Rectangle){0, 0, (float)winW, (float)winH}, (Vector2){0, 0}, 0, WHITE);
 
   DrawHud(winW, winH);
 }
@@ -713,10 +724,9 @@ int main(void) {
     EndDrawing();
   }
   Level_Unload(&level);
+  Level_UnloadArt();
   if (pixelTarget.id)
     UnloadRenderTexture(pixelTarget);
-  if (sceneTarget.id)
-    UnloadRenderTexture(sceneTarget);
   Fx_Unload();
   Art_Unload();
   SoundUnloadAll();
