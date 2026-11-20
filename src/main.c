@@ -1,3 +1,5 @@
+// Overheat: precision platformer in C + raylib.
+// J/Z jump, K hold/release to burst, A/D move, Esc pause, F1 debug, R restart.
 #include "art.h"
 #include "fx.h"
 #include "level.h"
@@ -11,6 +13,7 @@
 #define PHYSICS_DT (1.0f / 240.0f)
 #define PLAYER_W 40.0f
 #define PLAYER_H 64.0f
+// Movement tuning retained from the original BombRush controller.
 #define FALL_GRAV_MULT 1.5f
 #define MAX_FALL_SPEED 800.0f
 #define FAST_FALL_MULT 5.0f
@@ -39,6 +42,7 @@
 #define ALLOW_JUMP_WHILE_RISING true
 #define WALL_JUMP_FORCE_X 544.0f
 #define WALL_JUMP_FORCE_Y 480.0f
+// CLIMB_JUMP_FORCE omitted: wall climbing has been removed.
 #define WALL_JUMP_GRACE 0.1f
 #define WALL_JUMP_RUN_LERP 0.5f
 #define WALL_JUMP_TIME 0.2f
@@ -59,10 +63,10 @@
 #define STEP_SIZE 4.0f
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-// art is authored for a 320x180 virtual screen, scaled by whole numbers.
+// Art is authored for a 320x180 virtual screen, scaled by whole numbers.
 #define VIRT_W 320
 #define VIRT_H 180
-// art and level code each define the tile size; they must agree.
+// Art and level code each define the tile size; they must agree.
 _Static_assert(ART_TILE_PX == LEVEL_TILE_SIZE,
                "ART_TILE_PX and LEVEL_TILE_SIZE must match");
 
@@ -105,15 +109,15 @@ static bool debug, quitRequested, jumpQueued;
 static float accumulator;
 static RenderTexture2D pixelTarget;
 static Rectangle previousBox;
-// read once per physics step and shared by the movement functions.
+// Read once per physics step and shared by the movement functions.
 typedef struct {
   int moveDir, burstDir;
   bool jumpHeld, burstHeld, fastFall;
 } Input;
 static Input input;
 
-// manual borderless window: undecorated + sized/positioned to the monitor.
-// avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
+// Manual borderless window: undecorated + sized/positioned to the monitor.
+// Avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
 // like exclusive fullscreen. The 1px height reduction is a Windows workaround.
 static bool borderless = true;
 static void SetBorderless(bool on) {
@@ -187,6 +191,32 @@ static void AddHeat(float amount) {
   if (player.heat >= 100)
     player.overheated = true;
 }
+// A blocked step leaves the player up to a few pixels short of the surface.
+// Close that gap so the box rests exactly against it; otherwise the art-grid
+// snap in Art_DrawPlayer shows the sprite one art pixel off the ground.
+static void SettleAgainstSolid(bool horizontal, float step) {
+  float dir = step > 0 ? 1.0f : -1.0f;
+  float left = fabsf(step);
+  while (left >= 1.0f) {
+    Rectangle next = player.box;
+    if (horizontal)
+      next.x += dir;
+    else
+      next.y += dir;
+    if (Solid(next))
+      break;
+    player.box = next;
+    left -= 1.0f;
+  }
+  // Less than 1px remains: move to the whole pixel that touches the surface.
+  Rectangle snap = player.box;
+  if (horizontal)
+    snap.x = dir > 0 ? ceilf(snap.x) : floorf(snap.x);
+  else
+    snap.y = dir > 0 ? ceilf(snap.y) : floorf(snap.y);
+  if (!Solid(snap))
+    player.box = snap;
+}
 // Move in 4-pixel increments so high-speed bursts do not tunnel through walls.
 static int MoveAxis(float distance, bool horizontal) {
   int wallDir = 0;
@@ -198,6 +228,7 @@ static int MoveAxis(float distance, bool horizontal) {
     else
       next.y += step;
     if (Solid(next)) {
+      SettleAgainstSolid(horizontal, step);
       if (horizontal) {
         wallDir = step > 0 ? 1 : -1;
         player.vel.x = 0;
@@ -592,18 +623,18 @@ typedef struct {
   Rectangle view; // world rectangle covered by pixelTarget
 } WorldView;
 
-// everything that depends on window size and camera focus, in one place.
+// Everything that depends on window size and camera focus, in one place.
 static WorldView MakeWorldView(Rectangle focus, int winW, int winH) {
   WorldView v;
-  // round so a borderless window 1px short (e.g. 1920x1079) keeps its scale.
+  // Round so a borderless window 1px short (e.g. 1920x1079) keeps its scale.
   v.scale = (int)roundf(fminf(winW / (float)VIRT_W, winH / (float)VIRT_H));
   if (v.scale < 1)
     v.scale = 1;
-  // even size plus margin so the snapped view always covers the window.
+  // Even size plus margin so the snapped view always covers the window.
   v.lowW = ((int)ceilf(winW / (float)v.scale) + 3) & ~1;
   v.lowH = ((int)ceilf(winH / (float)v.scale) + 3) & ~1;
 
-  // snap the camera to the art-pixel grid; both passes share this target.
+  // Snap the camera to the art-pixel grid; both passes share this target.
   Vector2 target = {floorf((focus.x + focus.width / 2) / ART_PIXEL) * ART_PIXEL,
                     floorf((focus.y + focus.height) / ART_PIXEL) * ART_PIXEL -
                         40};
@@ -618,7 +649,7 @@ static WorldView MakeWorldView(Rectangle focus, int winW, int winH) {
   return v;
 }
 
-// (re)create a point-filtered render texture only when its size changes.
+// (Re)create a point-filtered render texture only when its size changes.
 static void EnsureTarget(RenderTexture2D *t, int w, int h) {
   if (t->id && t->texture.width == w && t->texture.height == h)
     return;
@@ -650,7 +681,7 @@ static void DrawWorld(void) {
   EndTextureMode();
 
   // Pass 2: upscale by whole pixels, then the player in full resolution.
-  // drawn straight to the screen; BeginDrawing() already cleared it.
+  // Drawn straight to the screen; BeginDrawing() already cleared it.
   Vector2 topLeft = GetWorldToScreen2D((Vector2){v.view.x, v.view.y}, v.cam);
   DrawTexturePro(pixelTarget.texture,
                  (Rectangle){0, 0, (float)v.lowW, -(float)v.lowH},
