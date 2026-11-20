@@ -13,7 +13,6 @@
 #define PHYSICS_DT (1.0f / 240.0f)
 #define PLAYER_W 40.0f
 #define PLAYER_H 64.0f
-// Movement tuning retained from the original BombRush controller.
 #define FALL_GRAV_MULT 1.5f
 #define MAX_FALL_SPEED 800.0f
 #define FAST_FALL_MULT 5.0f
@@ -42,7 +41,6 @@
 #define ALLOW_JUMP_WHILE_RISING true
 #define WALL_JUMP_FORCE_X 544.0f
 #define WALL_JUMP_FORCE_Y 480.0f
-// CLIMB_JUMP_FORCE omitted: wall climbing has been removed.
 #define WALL_JUMP_GRACE 0.1f
 #define WALL_JUMP_RUN_LERP 0.5f
 #define WALL_JUMP_TIME 0.2f
@@ -64,6 +62,8 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 // Art is authored for a 320x180 virtual screen, scaled by whole numbers.
+// we chose the number 320x180 because 320x180 can scale up to both 1920x1080
+// and 1280x720
 #define VIRT_W 320
 #define VIRT_H 180
 // Art and level code each define the tile size; they must agree.
@@ -119,7 +119,7 @@ static Input input;
 // Manual borderless window: undecorated + sized/positioned to the monitor.
 // Avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
 // like exclusive fullscreen. The 1px height reduction is a Windows workaround.
-static bool borderless = true;
+static bool borderless = false;
 static void SetBorderless(bool on) {
   if (borderless == on)
     return;
@@ -272,7 +272,7 @@ static void Burst(void) {
                      player.box.y + PLAYER_H / 2});
   SoundPlay(SFX_BURST);
 }
-// Input is shared so the movement steps need few parameters.
+// input is shared so the movement steps need few parameters.
 static void ReadInput(void) {
   bool left = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
   bool right = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
@@ -331,7 +331,7 @@ static void HandleJumpButton(void) {
       AddHeat(HEAT_DOUBLE);
     }
   }
-  // Jump cut uses stronger gravity, rather than instantly removing velocity.
+  // jump cut uses stronger gravity, rather than instantly removing velocity.
   if (!input.jumpHeld && player.vel.y < 0 && !player.jumpCut &&
       !player.burstRising)
     player.jumpCut = true;
@@ -431,7 +431,7 @@ static void CollectCrystals(void) {
   }
 }
 
-// Return true if the level restarted; don't update effects on the old player.
+// return true if the level restarted; don't update effects on the old player.
 static bool UpdateWaterBoss(float dt) {
   water.seconds += dt;
   water.x += (WATER_SPEED + WATER_GROWTH * water.seconds) * dt;
@@ -541,11 +541,11 @@ static void DrawPauseMenu(void) {
   if (Button("Main Menu", y + 165, 280))
     menu = MENU_MAIN;
 }
-// Hybrid renderer: pixel-art world + full-resolution player.
+// hybrid renderer: pixel-art world + full-resolution player.
 // Pass 1 draws the world into a small texture on the art-pixel grid.
 // Pass 2 upscales it by a whole number and draws the player at full
 // resolution, straight to the screen (no second full-size render texture).
-// World layer, drawn in the low-resolution render texture.
+// world layer, drawn in the low-resolution render texture.
 static void DrawLevel(Rectangle view) { Level_Draw(&level, view); }
 static void DrawWaterBoss(Rectangle view) {
   DrawRectangleRec(
@@ -674,7 +674,6 @@ static void DrawWorld(void) {
 }
 int main(void) {
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-  SetBorderless(borderless);
   InitWindow(1280, 720, "Overheat");
   SetExitKey(KEY_NULL);
   SearchAndSetResourceDir("resources");
@@ -683,6 +682,7 @@ int main(void) {
   Fx_Load();
   levelCount = Level_List(LEVEL_FILE, levelNames, 64);
   ReloadLevel();
+  SetBorderless(!borderless);
   while (!WindowShouldClose() && !quitRequested) {
     float dt = fminf(GetFrameTime(), 0.05f);
     if (IsKeyPressed(KEY_F11))
