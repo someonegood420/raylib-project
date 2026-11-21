@@ -17,14 +17,6 @@ static AnimId current = ANIM_IDLE;
 static float elapsed;
 static Shader whiteShader;
 
-// Sprites sit on the art-pixel grid, so the world and player never disagree.
-static float SnapToArtPixel(float v) {
-  return floorf(v / ART_PIXEL) * ART_PIXEL;
-}
-// Round a world coordinate to a whole screen pixel at the given camera zoom.
-static float RoundToScreen(float v, float zoom) {
-  return roundf(v * zoom) / zoom;
-}
 static Texture2D Art_LoadPointTexture(const char *path) {
   Texture2D t = LoadTexture(path);
   if (t.id)
@@ -73,26 +65,24 @@ void Art_DrawPlayer(const ArtPlayer *p) {
     return;
   }
 
+  // [NOTE] Size in world pixels: one sprite pixel is ART_PIXEL world pixels.
   float w = t.width * ART_PIXEL;
   float h = t.height * ART_PIXEL;
-  float sx = p->sx > 0 ? p->sx : 1.0f;
-  float sy = p->sy > 0 ? p->sy : 1.0f;
-  float zoom = p->zoom > 0 ? p->zoom : 1.0f;
 
-  // Center and feet snap to the art grid; stretched edges snap to screen px.
-  float cx = SnapToArtPixel(p->box.x + p->box.width / 2 - w / 2) + w / 2;
-  // Round the feet up: a landing can stop up to one step above the ground.
-  float feet = ceilf((p->box.y + p->box.height) / ART_PIXEL) * ART_PIXEL;
-  float x0 = RoundToScreen(cx - w * sx / 2, zoom);
-  float x1 = RoundToScreen(cx + w * sx / 2, zoom);
-  float y0 = RoundToScreen(feet - h * sy, zoom);
-  Rectangle dst = {x0, y0, x1 - x0, feet - y0};
+  // [NOTE] Center the sprite on the collision box and keep it on the art-pixel
+  // grid so it lines up with the world.
+  // [HACK] The feet round UP: after landing, MoveAxis can leave the box up to
+  // one step above the ground, and this keeps the sprite flush with it.
+  Rectangle dst = {
+      floorf((p->box.x + p->box.width / 2 - w / 2) / ART_PIXEL) * ART_PIXEL,
+      ceilf((p->box.y + p->box.height) / ART_PIXEL) * ART_PIXEL - h, w, h};
 
-  // Negative source width mirrors the sprite.
+  // [NOTE] A negative source width mirrors the sprite to face left.
   Rectangle src = {0, 0, p->facingRight ? (float)t.width : -(float)t.width,
                    (float)t.height};
   Color tint = p->hot ? (Color){255, 130, 110, 255} : WHITE;
 
+  // [INFO] The white shader makes the sprite flash while a burst is charged.
   if (flash && whiteShader.id)
     BeginShaderMode(whiteShader);
   DrawTexturePro(t, src, dst, (Vector2){0, 0}, 0, tint);

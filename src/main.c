@@ -13,6 +13,7 @@
 #define PHYSICS_DT (1.0f / 240.0f)
 #define PLAYER_W 40.0f
 #define PLAYER_H 64.0f
+// Movement Variables
 #define FALL_GRAV_MULT 1.5f
 #define MAX_FALL_SPEED 800.0f
 #define FAST_FALL_MULT 5.0f
@@ -61,12 +62,10 @@
 #define STEP_SIZE 4.0f
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-// Art is authored for a 320x180 virtual screen, scaled by whole numbers.
-// we chose the number 320x180 because 320x180 can scale up to both 1920x1080
-// and 1280x720
+// [NOTE] Art is authored for a 320x180 virtual screen, scaled by whole numbers.
 #define VIRT_W 320
 #define VIRT_H 180
-// Art and level code each define the tile size; they must agree.
+// [NOTE] Art and level code each define the tile size; they must agree.
 _Static_assert(ART_TILE_PX == LEVEL_TILE_SIZE,
                "ART_TILE_PX and LEVEL_TILE_SIZE must match");
 
@@ -119,7 +118,7 @@ static Input input;
 // Manual borderless window: undecorated + sized/positioned to the monitor.
 // Avoid ToggleBorderlessWindowed() on systems where it flickers or behaves
 // like exclusive fullscreen. The 1px height reduction is a Windows workaround.
-static bool borderless = false;
+static bool borderless = true;
 static void SetBorderless(bool on) {
   if (borderless == on)
     return;
@@ -272,7 +271,7 @@ static void Burst(void) {
                      player.box.y + PLAYER_H / 2});
   SoundPlay(SFX_BURST);
 }
-// input is shared so the movement steps need few parameters.
+// Input is shared so the movement steps need few parameters.
 static void ReadInput(void) {
   bool left = IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT);
   bool right = IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT);
@@ -331,7 +330,7 @@ static void HandleJumpButton(void) {
       AddHeat(HEAT_DOUBLE);
     }
   }
-  // jump cut uses stronger gravity, rather than instantly removing velocity.
+  // Jump cut uses stronger gravity, rather than instantly removing velocity.
   if (!input.jumpHeld && player.vel.y < 0 && !player.jumpCut &&
       !player.burstRising)
     player.jumpCut = true;
@@ -431,7 +430,7 @@ static void CollectCrystals(void) {
   }
 }
 
-// return true if the level restarted; don't update effects on the old player.
+// Return true if the level restarted; don't update effects on the old player.
 static bool UpdateWaterBoss(float dt) {
   water.seconds += dt;
   water.x += (WATER_SPEED + WATER_GROWTH * water.seconds) * dt;
@@ -541,11 +540,25 @@ static void DrawPauseMenu(void) {
   if (Button("Main Menu", y + 165, 280))
     menu = MENU_MAIN;
 }
-// hybrid renderer: pixel-art world + full-resolution player.
-// Pass 1 draws the world into a small texture on the art-pixel grid.
-// Pass 2 upscales it by a whole number and draws the player at full
-// resolution, straight to the screen (no second full-size render texture).
-// world layer, drawn in the low-resolution render texture.
+/* ---------------------------------------------------------------------------
+ * [INFO] RENDERING OVERVIEW
+ *
+ * Three units of measure are used:
+ *   world pixel  - what physics and collision use (a tile is 32 of them)
+ *   art pixel    - one pixel of our sprites = ART_PIXEL (4) world pixels
+ *   screen pixel - what the monitor shows = `scale` per art pixel
+ *
+ * Each frame is drawn in two steps:
+ *   1. The WORLD (tiles, water, crystals, effects) is drawn into a small
+ *      texture where 1 texel = 1 art pixel, so it is always pixel-perfect.
+ *   2. That texture is enlarged by a whole number (`scale`) onto the screen,
+ *      then the PLAYER is drawn on top at full resolution using a camera
+ *      that lines up exactly with the enlarged texture.
+ *
+ * The camera is snapped to the art-pixel grid so both steps agree on where
+ * everything is. The HUD is drawn last in plain screen pixels.
+ * ------------------------------------------------------------------------ */
+// [NOTE] Step 1 helpers: these draw in world pixels.
 static void DrawLevel(Rectangle view) { Level_Draw(&level, view); }
 static void DrawWaterBoss(Rectangle view) {
   DrawRectangleRec(
@@ -557,17 +570,14 @@ static void DrawCrystals(void) {
     if (!level.crystalTaken[i])
       DrawRectangleLinesEx(level.crystals[i], 2, (Color){145, 240, 255, 180});
 }
-// Player is drawn only in the full-resolution camera pass.
-static void DrawPlayer(Rectangle drawn, float zoom) {
+// [NOTE] Step 2 helper: the player is drawn in the full-resolution pass.
+static void DrawPlayer(void) {
   Art_DrawPlayer(&(ArtPlayer){
-      .box = drawn,
+      .box = player.box,
       .facingRight = player.facingRight,
       .hot = player.overheated,
       .chargedFlash = player.charging && player.charge >= BURST_CHARGE_TIME &&
-                      !player.overheated,
-      .sx = 1.0f,
-      .sy = 1.0f,
-      .zoom = zoom});
+                      !player.overheated});
 }
 static void DrawHud(int winW, int winH) {
   DrawRectangle(20, 18, 220, 16, (Color){50, 50, 50, 255});
@@ -589,32 +599,42 @@ static void DrawHud(int winW, int winH) {
            GRAY);
 }
 
+// [INFO] Everything that depends on the window size and where the camera looks.
 typedef struct {
-  int scale;      // screen pixels per art pixel (whole number)
-  int lowW, lowH; // pixelTarget size in art pixels
-  Camera2D cam;   // full-res camera: world -> screen
-  Rectangle view; // world rectangle covered by pixelTarget
+  int scale;       // screen pixels per art pixel (a whole number)
+  int lowW, lowH;  // size of the small world texture, in art pixels
+  Camera2D screen; // maps world pixels to screen pixels (for the player)
+  Camera2D lowRes; // maps world pixels to the small world texture
+  Rectangle view;  // part of the world the small texture covers
 } WorldView;
 
-// Everything that depends on window size and camera focus, in one place.
-static WorldView MakeWorldView(Rectangle focus, int winW, int winH) {
+static WorldView MakeWorldView(int winW, int winH) {
   WorldView v;
-  // Round so a borderless window 1px short (e.g. 1920x1079) keeps its scale.
+
+  // [HACK] Largest whole-number scale that fits a 320x180 view. Rounding
+  // (not flooring) keeps the scale stable when a borderless window is one
+  // pixel short, e.g. 1920x1079.
   v.scale = (int)roundf(fminf(winW / (float)VIRT_W, winH / (float)VIRT_H));
   if (v.scale < 1)
     v.scale = 1;
-  // Even size plus margin so the snapped view always covers the window.
+
+  // [NOTE] The texture must cover the whole window, so size it up with a small
+  // margin. Keeping it even lets the camera sit exactly in its center.
   v.lowW = ((int)ceilf(winW / (float)v.scale) + 3) & ~1;
   v.lowH = ((int)ceilf(winH / (float)v.scale) + 3) & ~1;
 
-  // Snap the camera to the art-pixel grid; both passes share this target.
-  Vector2 target = {floorf((focus.x + focus.width / 2) / ART_PIXEL) * ART_PIXEL,
-                    floorf((focus.y + focus.height) / ART_PIXEL) * ART_PIXEL -
-                        40};
-  v.cam = (Camera2D){.target = target,
-                     .offset = {floorf(winW / 2.0f), floorf(winH / 2.0f)},
-                     .rotation = 0,
-                     .zoom = (float)v.scale / ART_PIXEL};
+  // [NOTE] Look at the player's feet, rounded DOWN to the art-pixel grid. Both
+  // cameras share this point, which keeps the two steps perfectly aligned.
+  Vector2 target = {
+      floorf((player.box.x + player.box.width / 2) / ART_PIXEL) * ART_PIXEL,
+      floorf((player.box.y + player.box.height) / ART_PIXEL) * ART_PIXEL - 40};
+
+  v.screen = (Camera2D){.target = target,
+                        .offset = {floorf(winW / 2.0f), floorf(winH / 2.0f)},
+                        .zoom = (float)v.scale / ART_PIXEL};
+  v.lowRes = (Camera2D){.target = target,
+                        .offset = {v.lowW / 2.0f, v.lowH / 2.0f},
+                        .zoom = 1.0f / ART_PIXEL};
   v.view =
       (Rectangle){target.x - v.lowW * ART_PIXEL / 2.0f,
                   target.y - v.lowH * ART_PIXEL / 2.0f,
@@ -622,7 +642,7 @@ static WorldView MakeWorldView(Rectangle focus, int winW, int winH) {
   return v;
 }
 
-// (Re)create a point-filtered render texture only when its size changes.
+// [INFO] (Re)create a point-filtered render texture only when its size changes.
 static void EnsureTarget(RenderTexture2D *t, int w, int h) {
   if (t->id && t->texture.width == w && t->texture.height == h)
     return;
@@ -632,48 +652,52 @@ static void EnsureTarget(RenderTexture2D *t, int w, int h) {
   SetTextureFilter(t->texture, TEXTURE_FILTER_POINT);
 }
 
-static void DrawWorld(void) {
-  int winW = GetScreenWidth(), winH = GetScreenHeight();
-  Rectangle drawn = player.box;
-  WorldView v = MakeWorldView(drawn, winW, winH);
-  EnsureTarget(&pixelTarget, v.lowW, v.lowH);
-
-  // Pass 1: tiles, boss, and effects on the native pixel grid.
-  Camera2D pixelCam = {.target = v.cam.target,
-                       .offset = {v.lowW / 2.0f, v.lowH / 2.0f},
-                       .rotation = 0,
-                       .zoom = 1.0f / ART_PIXEL};
+// [INFO] Step 1: draw the world into the small texture.
+static void DrawWorldTexture(const WorldView *v) {
+  EnsureTarget(&pixelTarget, v->lowW, v->lowH);
   BeginTextureMode(pixelTarget);
   ClearBackground((Color){18, 24, 35, 255});
-  BeginMode2D(pixelCam);
-  DrawLevel(v.view);
-  DrawWaterBoss(v.view);
+  BeginMode2D(v->lowRes);
+  DrawLevel(v->view);
+  DrawWaterBoss(v->view);
   DrawCrystals();
   Fx_Draw();
   EndMode2D();
   EndTextureMode();
+}
 
-  // Pass 2: upscale by whole pixels, then the player in full resolution.
-  // Drawn straight to the screen; BeginDrawing() already cleared it.
-  Vector2 topLeft = GetWorldToScreen2D((Vector2){v.view.x, v.view.y}, v.cam);
-  DrawTexturePro(pixelTarget.texture,
-                 (Rectangle){0, 0, (float)v.lowW, -(float)v.lowH},
-                 (Rectangle){topLeft.x, topLeft.y, (float)(v.lowW * v.scale),
-                             (float)(v.lowH * v.scale)},
-                 (Vector2){0, 0}, 0, WHITE);
-  BeginMode2D(v.cam);
-  DrawPlayer(drawn, v.cam.zoom);
+// [INFO] Step 2: enlarge the texture onto the screen, then draw the player
+// on top.
+static void DrawScaledWorld(const WorldView *v) {
+  // [NOTE] Where the texture's top-left corner lands on screen.
+  Vector2 topLeft =
+      GetWorldToScreen2D((Vector2){v->view.x, v->view.y}, v->screen);
+  // [NOTE] A negative source height flips the texture (OpenGL is upside down).
+  Rectangle src = {0, 0, (float)v->lowW, -(float)v->lowH};
+  Rectangle dst = {topLeft.x, topLeft.y, (float)(v->lowW * v->scale),
+                   (float)(v->lowH * v->scale)};
+  DrawTexturePro(pixelTarget.texture, src, dst, (Vector2){0, 0}, 0, WHITE);
+
+  BeginMode2D(v->screen);
+  DrawPlayer();
   if (debug) {
     for (int i = 0; i < level.solidCount; i++)
       DrawRectangleLinesEx(level.solids[i], 2, GREEN);
-    DrawRectangleLinesEx(drawn, 2, RED);
+    DrawRectangleLinesEx(player.box, 2, RED);
   }
   EndMode2D();
+}
 
+static void DrawWorld(void) {
+  int winW = GetScreenWidth(), winH = GetScreenHeight();
+  WorldView v = MakeWorldView(winW, winH);
+  DrawWorldTexture(&v);
+  DrawScaledWorld(&v);
   DrawHud(winW, winH);
 }
 int main(void) {
   SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
+  SetBorderless(borderless);
   InitWindow(1280, 720, "Overheat");
   SetExitKey(KEY_NULL);
   SearchAndSetResourceDir("resources");
@@ -682,7 +706,6 @@ int main(void) {
   Fx_Load();
   levelCount = Level_List(LEVEL_FILE, levelNames, 64);
   ReloadLevel();
-  SetBorderless(!borderless);
   while (!WindowShouldClose() && !quitRequested) {
     float dt = fminf(GetFrameTime(), 0.05f);
     if (IsKeyPressed(KEY_F11))
